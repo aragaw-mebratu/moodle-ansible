@@ -1,0 +1,36 @@
+- name: Add Dragonfly Helm repo
+  kubernetes.core.helm_repository:
+    name: dragonfly
+    repo_url: https://dragonflyoss.github.io/helm-charts/
+
+- name: Update Helm repos
+  ansible.builtin.command: helm repo update
+  changed_when: false
+
+- name: Uninstall existing Dragonfly (if any)
+  kubernetes.core.helm:
+    name: "{{ dragonfly_release }}"
+    namespace: "{{ dragonfly_namespace }}"
+    state: absent
+
+- name: Install Dragonfly
+  kubernetes.core.helm:
+    name: "{{ dragonfly_release }}"
+    chart_ref: dragonfly/dragonfly
+    release_namespace: "{{ dragonfly_namespace }}"
+    create_namespace: true
+    values:
+      auth:
+        enabled: true
+        password: "{{ dragonfly_password }}"
+
+      replicaCount: "{{ dragonfly_replica_count }}"
+
+      service:
+        type: "{{ dragonfly_service_type }}"
+
+      persistence:
+        enabled: "{{ dragonfly_persistence.enabled }}"
+        size: "{{ dragonfly_persistence.size }}"
+        storageClass: "{{ dragonfly_persistence.storageClass }}"
+    timeout: 10m

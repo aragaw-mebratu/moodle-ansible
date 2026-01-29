@@ -1,0 +1,14 @@
+dragonfly_release: dragonfly
+dragonfly_namespace: dragonfly-system
+
+dragonfly_password: "cbt@u0g123!!"
+
+dragonfly_replica_count: 3
+
+dragonfly_service_type: ClusterIP
+
+dragonfly_persistence:
+  enabled: true
+  size: 50Gi
+  storageClass: rook-cephfs
+

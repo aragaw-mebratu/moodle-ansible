@@ -1,0 +1,6 @@
+- name: Deploy Dragonfly caching
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - dragonfly
+

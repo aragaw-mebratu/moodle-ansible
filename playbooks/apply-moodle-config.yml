@@ -1,0 +1,23 @@
+---
+- name: Apply Moodle config.php via ConfigMap
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Render Moodle config.php
+      ansible.builtin.template:
+        src: templates/config.php.j2
+        dest: /tmp/config.php
+
+    - name: Create / update Moodle ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: config
+            namespace: "{{ moodle.namespace }}"
+          data:
+            config.php: "{{ lookup('file', '/tmp/config.php') }}"

@@ -1,0 +1,62 @@
+---
+- name: Deploy Moodle config.php via ConfigMap
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - inventories/prod/group_vars/all.yml
+
+  tasks:
+    - name: Render config.php to temporary local file
+      template:
+        src: ../templates/config.php.j2
+        dest: /tmp/config.php
+        mode: 0644
+
+    - name: Create or update Moodle config ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ moodle.namespace }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: moodle-config
+          data:
+            config.php: "{{ lookup('file', '/tmp/config.php') }}"
+
+    - name: Patch Moodle deployment to mount the ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ moodle.namespace }}"
+        kind: Deployment
+        name: "{{ moodle.release_name }}"
+        merge_type: strategic-merge
+        definition:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: moodle
+                    volumeMounts:
+                      - name: moodle-config-volume
+                        mountPath: /bitnami/moodle/config.php
+                        subPath: config.php
+                volumes:
+                  - name: moodle-config-volume
+                    configMap:
+                      name: moodle-config
+
+    - name: Restart Moodle deployment to pick up new config
+      kubernetes.core.k8s:
+        kubeconfig: /home/ansible/.kube/config
+        kind: Deployment
+        namespace: moodle
+        name: moodle
+        merge_type: strategic-merge
+        definition:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  redeploy-timestamp: "{{ lookup('pipe', 'date +%s') }}"
+

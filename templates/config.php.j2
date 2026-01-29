@@ -1,0 +1,45 @@
+<?php
+unset($CFG);
+global $CFG;
+$CFG = new stdClass();
+$CFG->dbtype    = 'pgsql';
+$CFG->dblibrary = 'native';
+$CFG->dbhost    = 'moodle-db-cluster.database.svc.cluster.local';
+$CFG->dbname    = 'moodledb';
+$CFG->dbuser    = 'moodleuser';
+$CFG->dbpass    = 'PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw';
+$CFG->prefix    = 'mdl_';
+$CFG->dboptions = array (
+  'dbpersist' => 0,
+  'dbport' => 5432,
+  'dbsocket' => '',
+);
+
+if (empty($_SERVER['HTTP_HOST'])) {
+  $_SERVER['HTTP_HOST'] = '127.0.0.1:8080';
+}
+if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') {
+  $CFG->wwwroot = 'https://' . $_SERVER['HTTP_HOST'];
+} else {
+  $CFG->wwwroot = 'http://' . $_SERVER['HTTP_HOST'];
+}
+$CFG->dataroot  = '/bitnami/moodledata';
+$CFG->admin     = 'admin';
+$CFG->directorypermissions = 02775;
+
+/* ===== Redis / Dragonfly ===== */
+$CFG->session_handler_class = '\core\session\redis';
+$CFG->session_redis_host = 'dragonfly-redis-master.dragonfly-system.svc.cluster.local';
+$CFG->session_redis_port = 6379;
+$CFG->session_redis_auth = 'dragonfly';
+$CFG->session_redis_database = 0;
+$CFG->session_redis_prefix = 'moodle_sess_';
+$CFG->session_redis_acquire_lock_timeout = 120;
+
+/* Application cache */
+$CFG->redis_host = 'dragonfly-redis-master.dragonfly-system.svc.cluster.local';
+$CFG->redis_port = 6379;
+$CFG->redis_password = 'dragonfly';
+$CFG->redis_prefix = 'moodle_cache_';
+
+require_once(__DIR__ . '/lib/setup.php');

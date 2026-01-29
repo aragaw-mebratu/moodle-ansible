@@ -1,0 +1,75 @@
+---
+- name: Deploy Moodle via Helm
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Add Bitnami Helm repo
+      kubernetes.core.helm_repository:
+        name: bitnami
+        repo_url: https://charts.bitnami.com/bitnami
+
+    - name: Deploy Moodle
+      kubernetes.core.helm:
+        name: "{{ moodle.release_name }}"
+        chart_ref: bitnami/moodle
+        release_namespace: "{{ moodle.namespace }}"
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig }}"
+        timeout: 30m
+        values:
+          global:
+            security:
+              allowInsecureImages: true
+
+          image:
+            repository: aragawmebratu/moodle-with-tools
+            tag: latest
+
+          mariadb:
+            enabled: false
+
+          externalDatabase:
+            host: "{{ external_db.host }}"
+            port: "{{ external_db.port }}"
+            user: "{{ external_db.user }}"
+            password: "{{ external_db_password }}"
+            database: "{{ external_db.database }}"
+            type: "{{ external_db.type }}"
+
+          moodleSkipInstall: true
+
+          redis:
+            enabled: false
+
+          externalRedis:
+            host: "{{ dragonfly.host }}"
+            port: "{{ dragonfly.port }}"
+            password: "{{ dragonfly_password }}"
+
+          replicaCount: "{{ moodle.replica_count }}"
+
+          moodleUsername: admin
+          moodlePassword: "{{ moodle_admin_password }}"
+          moodleEmail: admin@example.com
+
+          service:
+            type: "{{ moodle.service.type }}"
+            nodePort: "{{ moodle.service.nodePort }}"
+
+          persistence:
+            enabled: "{{ moodle.persistence.enabled }}"
+            size: "{{ moodle.persistence.size }}"
+            storageClass: "{{ moodle.persistence.storageClass }}"
+            accessModes: "{{ moodle.persistence.accessModes }}"
+
+          resources: "{{ moodle.resources }}"
+          extraVolumes:
+           - name: config
+             configMap:
+               name: config
+          extraVolumeMounts:
+           - name: moodle-config
+             mountPath: /bitnami/moodle/config.php
+             subPath: config.php
+             readOnly: true
