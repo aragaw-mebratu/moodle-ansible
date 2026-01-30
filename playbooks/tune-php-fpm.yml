@@ -6,7 +6,6 @@
   vars:
     moodle_namespace: moodle
     php_fpm_conf_path: "/opt/bitnami/php/etc/php-fpm.d/www.conf"
-    
     pm_type: "dynamic"
     max_children: 500
     start_servers: 50
@@ -14,7 +13,7 @@
     max_spare_servers: 100
     max_requests: 1000
     moodle_label_selector: "app=moodle"
-    # new
+
   tasks:
     - name: Discover Moodle pods using Kubernetes Python client
       community.kubernetes.k8s_info:
