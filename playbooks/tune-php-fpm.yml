@@ -6,25 +6,22 @@
   vars:
     moodle_namespace: moodle
     php_fpm_conf_path: "/opt/bitnami/php/etc/php-fpm.d/www.conf"
-
-    # Tuned PHP-FPM settings
+    
     pm_type: "dynamic"
     max_children: 500
     start_servers: 50
     min_spare_servers: 50
     max_spare_servers: 100
     max_requests: 1000
-
-    # Optional label selector for Moodle pods
     moodle_label_selector: "app=moodle"
 
   tasks:
-    - name: Discover Moodle pods dynamically
-      kubernetes.core.k8s_info:
+    - name: Discover Moodle pods using Kubernetes Python client
+      community.kubernetes.k8s_info:
         kind: Pod
         namespace: "{{ moodle_namespace }}"
         label_selectors:
-          - "app=moodle"
+          - "{{ moodle_label_selector }}"
       register: moodle_pods_info
 
     - name: Set Moodle pods list
