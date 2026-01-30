@@ -1,8 +1,10 @@
 ---
-- name: Tune PHP-FPM for Moodle
-  hosts: moodle
-  become: yes
+- name: Tune PHP-FPM for Moodle dynamically
+  hosts: localhost
+  connection: local
+  gather_facts: no
   vars:
+    moodle_namespace: moodle
     php_fpm_conf_path: "/opt/bitnami/php/etc/php-fpm.d/www.conf"
 
     # Tuned PHP-FPM settings
@@ -13,58 +15,40 @@
     max_spare_servers: 100
     max_requests: 1000
 
+    # Optional label selector for Moodle pods
+    moodle_label_selector: "app=moodle"
+
   tasks:
-    - name: Backup existing www.conf
-      copy:
-        src: "{{ php_fpm_conf_path }}"
-        dest: "{{ php_fpm_conf_path }}.bak"
-        remote_src: yes
-        mode: 0644
+    - name: Discover Moodle pods dynamically
+      shell: kubectl get pods -n {{ moodle_namespace }} -l {{ moodle_label_selector }} -o jsonpath='{.items[*].metadata.name}'
+      register: moodle_pods_raw
 
-    - name: Update PHP-FPM pm type
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^pm\s*='
-        line: "pm = {{ pm_type }}"
-        state: present
+    - name: Set Moodle pods list
+      set_fact:
+        moodle_pods: "{{ moodle_pods_raw.stdout.split() }}"
 
-    - name: Update pm.max_children
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^pm.max_children\s*='
-        line: "pm.max_children = {{ max_children }}"
-        state: present
+    - name: Backup www.conf inside each Moodle pod
+      shell: >
+        kubectl exec -n {{ moodle_namespace }} {{ item }} -- cp {{ php_fpm_conf_path }} {{ php_fpm_conf_path }}.bak
+      loop: "{{ moodle_pods }}"
 
-    - name: Update pm.start_servers
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^pm.start_servers\s*='
-        line: "pm.start_servers = {{ start_servers }}"
-        state: present
-
-    - name: Update pm.min_spare_servers
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^pm.min_spare_servers\s*='
-        line: "pm.min_spare_servers = {{ min_spare_servers }}"
-        state: present
-
-    - name: Update pm.max_spare_servers
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^pm.max_spare_servers\s*='
-        line: "pm.max_spare_servers = {{ max_spare_servers }}"
-        state: present
-
-    - name: Update pm.max_requests
-      lineinfile:
-        path: "{{ php_fpm_conf_path }}"
-        regexp: '^;?pm.max_requests\s*='
-        line: "pm.max_requests = {{ max_requests }}"
-        state: present
-
-    - name: Reload PHP-FPM to apply new configuration
+    - name: Update PHP-FPM settings inside Moodle pods
       shell: |
-        systemctl reload php-fpm
-      args:
-        warn: false
+        kubectl exec -n {{ moodle_namespace }} {{ item }} -- bash -c "
+          sed -i 's/^pm\s*=.*/pm = {{ pm_type }}/' {{ php_fpm_conf_path }}
+          sed -i 's/^pm.max_children\s*=.*/pm.max_children = {{ max_children }}/' {{ php_fpm_conf_path }}
+          sed -i 's/^pm.start_servers\s*=.*/pm.start_servers = {{ start_servers }}/' {{ php_fpm_conf_path }}
+          sed -i 's/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = {{ min_spare_servers }}/' {{ php_fpm_conf_path }}
+          sed -i 's/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = {{ max_spare_servers }}/' {{ php_fpm_conf_path }}
+          sed -i 's/^;*pm.max_requests\s*=.*/pm.max_requests = {{ max_requests }}/' {{ php_fpm_conf_path }}
+        "
+      loop: "{{ moodle_pods }}"
+
+    - name: Reload PHP-FPM inside each Moodle pod
+      shell: >
+        kubectl exec -n {{ moodle_namespace }} {{ item }} -- systemctl reload php-fpm
+      loop: "{{ moodle_pods }}"
+
+    - name: Show completed message
+      debug:
+        msg: "PHP-FPM tuning applied successfully to pods: {{ moodle_pods }}"
