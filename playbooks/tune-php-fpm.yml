@@ -14,7 +14,7 @@
     max_spare_servers: 100
     max_requests: 1000
     moodle_label_selector: "app=moodle"
-
+    # new
   tasks:
     - name: Discover Moodle pods using Kubernetes Python client
       community.kubernetes.k8s_info:
