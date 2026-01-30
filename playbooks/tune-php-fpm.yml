@@ -20,33 +20,51 @@
 
   tasks:
     - name: Discover Moodle pods dynamically
-      shell: kubectl get pods -n {{ moodle_namespace }} -l {{ moodle_label_selector }} -o jsonpath='{.items[*].metadata.name}'
-      register: moodle_pods_raw
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ moodle_namespace }}"
+        label_selectors:
+          - "app=moodle"
+      register: moodle_pods_info
 
     - name: Set Moodle pods list
       set_fact:
-        moodle_pods: "{{ moodle_pods_raw.stdout.split() }}"
+        moodle_pods: "{{ moodle_pods_info.resources | map(attribute='metadata.name') | list }}"
 
     - name: Backup www.conf inside each Moodle pod
-      shell: >
-        kubectl exec -n {{ moodle_namespace }} {{ item }} -- cp {{ php_fpm_conf_path }} {{ php_fpm_conf_path }}.bak
+      kubernetes.core.k8s_exec:
+        namespace: "{{ moodle_namespace }}"
+        pod: "{{ item }}"
+        command:
+          - cp
+          - "{{ php_fpm_conf_path }}"
+          - "{{ php_fpm_conf_path }}.bak"
       loop: "{{ moodle_pods }}"
 
     - name: Update PHP-FPM settings inside Moodle pods
-      shell: |
-        kubectl exec -n {{ moodle_namespace }} {{ item }} -- bash -c "
-          sed -i 's/^pm\s*=.*/pm = {{ pm_type }}/' {{ php_fpm_conf_path }}
-          sed -i 's/^pm.max_children\s*=.*/pm.max_children = {{ max_children }}/' {{ php_fpm_conf_path }}
-          sed -i 's/^pm.start_servers\s*=.*/pm.start_servers = {{ start_servers }}/' {{ php_fpm_conf_path }}
-          sed -i 's/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = {{ min_spare_servers }}/' {{ php_fpm_conf_path }}
-          sed -i 's/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = {{ max_spare_servers }}/' {{ php_fpm_conf_path }}
-          sed -i 's/^;*pm.max_requests\s*=.*/pm.max_requests = {{ max_requests }}/' {{ php_fpm_conf_path }}
-        "
+      kubernetes.core.k8s_exec:
+        namespace: "{{ moodle_namespace }}"
+        pod: "{{ item }}"
+        command:
+          - bash
+          - -c
+          - |
+            sed -i 's/^pm\s*=.*/pm = {{ pm_type }}/' {{ php_fpm_conf_path }}
+            sed -i 's/^pm.max_children\s*=.*/pm.max_children = {{ max_children }}/' {{ php_fpm_conf_path }}
+            sed -i 's/^pm.start_servers\s*=.*/pm.start_servers = {{ start_servers }}/' {{ php_fpm_conf_path }}
+            sed -i 's/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = {{ min_spare_servers }}/' {{ php_fpm_conf_path }}
+            sed -i 's/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = {{ max_spare_servers }}/' {{ php_fpm_conf_path }}
+            sed -i 's/^;*pm.max_requests\s*=.*/pm.max_requests = {{ max_requests }}/' {{ php_fpm_conf_path }}
       loop: "{{ moodle_pods }}"
 
     - name: Reload PHP-FPM inside each Moodle pod
-      shell: >
-        kubectl exec -n {{ moodle_namespace }} {{ item }} -- systemctl reload php-fpm
+      kubernetes.core.k8s_exec:
+        namespace: "{{ moodle_namespace }}"
+        pod: "{{ item }}"
+        command:
+          - systemctl
+          - reload
+          - php-fpm
       loop: "{{ moodle_pods }}"
 
     - name: Show completed message
