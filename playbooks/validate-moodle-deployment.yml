@@ -7,26 +7,35 @@
   vars:
     moodle_namespace: "moodle"
     source_kubeconfig: "/home/ansible/.kube/config"
-    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default(source_kubeconfig, true) }}"
+    # Try KUBECONFIG env var first, then check if source exists, fallback to error
+    kubeconfig_path: >-
+      {{ lookup('env', 'KUBECONFIG') | default( 
+        (source_kubeconfig if (lookup('file', source_kubeconfig, errors='ignore') | length > 0) else '/dev/null'), 
+        true 
+      ) }}
   
   pre_tasks:
-    - name: Check if source kubeconfig exists (for informational purposes)
-      stat:
-        path: "{{ source_kubeconfig }}"
-      register: kubeconfig_stat
+    - name: Check available kubeconfig options
+      set_fact:
+        env_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}"
+        source_kubeconfig_exists: "{{ (lookup('file', source_kubeconfig, errors='ignore') | length > 0) }}"
       delegate_to: localhost
       run_once: true
-      ignore_errors: true
     
-    - name: Display kubeconfig status
+    - name: Display kubeconfig configuration
       debug:
         msg: |
-          KUBECONFIG environment variable: {{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}
+          KUBECONFIG environment variable: {{ env_kubeconfig }}
+          Source kubeconfig (/home/ansible/.kube/config): {{ 'Exists' if source_kubeconfig_exists else 'Not accessible' }}
           Using kubeconfig path: {{ kubeconfig_path }}
-          Source kubeconfig exists: {{ kubeconfig_stat.stat.exists | default('Unknown') }}
           
-          Note: The playbook will attempt to connect using the specified kubeconfig.
-          If connection fails, check that the kubeconfig file is accessible and valid.
+          Configuration priority:
+          1. KUBECONFIG environment variable (if set)
+          2. /home/ansible/.kube/config (if accessible)
+          3. Will fail if neither is available
+          
+          For AWX: Set KUBECONFIG as an extra variable in your job template
+          pointing to your kubeconfig file location.
   
   environment:
     KUBECONFIG: "{{ kubeconfig_path }}"
@@ -53,12 +62,15 @@
           Current KUBECONFIG path: {{ kubeconfig_path }}
           Error: {{ namespace_info.msg | default('Unknown connection error') }}
           
-          This playbook includes an embedded kubeconfig for AWX compatibility.
-          If you're running this outside of AWX, you can override the kubeconfig path:
-          KUBECONFIG=/path/to/your/kubeconfig ansible-playbook ...
+          Troubleshooting for AWX:
+          1. Set KUBECONFIG as an extra variable in your AWX job template
+          2. Ensure the kubeconfig file is accessible from AWX execution environment
+          3. Check file permissions (should be readable by ansible user)
+          4. Verify Kubernetes API server is reachable
           
-          For AWX: Ensure the playbook has proper permissions to create temporary files.
-      when: namespace_info is failed or (namespace_info.get('failed', False) and ("Connection refused" in namespace_info.get('msg', '') or "no such file" in namespace_info.get('msg', '') or "cannot read" in namespace_info.get('msg', '') or "Invalid kube-config" in namespace_info.get('msg', '')))
+          For CLI testing:
+          KUBECONFIG=/path/to/your/kubeconfig ansible-playbook ...
+      when: namespace_info is failed or (namespace_info.get('failed', False) and ("Connection refused" in namespace_info.get('msg', '') or "no such file" in namespace_info.get('msg', '') or "cannot read" in namespace_info.get('msg', '') or "Invalid kube-config" in namespace_info.get('msg', '') or "could not read" in namespace_info.get('msg', '')))
       
     - name: Set namespace existence fact
       set_fact:
@@ -72,11 +84,17 @@
           Current KUBECONFIG path: {{ kubeconfig_path }}
           Error details: {{ namespace_info.msg | default('Connection failed') }}
           
-          Troubleshooting steps:
-          1. For AWX: Check if the container can write to /tmp directory
-          2. For CLI: Verify kubeconfig file exists: ls -la {{ kubeconfig_path }}
-          3. Test connection manually: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
-          4. Check file permissions: Ensure readable by ansible user
+          AWX Configuration Required:
+          In your AWX job template, set an extra variable:
+          KUBECONFIG: /path/to/your/kubeconfig/file
+          
+          The kubeconfig file must be:
+          - Accessible from the AWX execution environment
+          - Readable by the ansible user
+          - Containing valid Kubernetes cluster credentials
+          
+          CLI testing command:
+          KUBECONFIG={{ kubeconfig_path }} kubectl get nodes
       when: not k8s_connection_success
       
     - name: Fail if namespace doesn't exist
