@@ -8,6 +8,8 @@
     moodle_namespace: "moodle"
     # Default kubeconfig path
     default_kubeconfig: "/home/ansible/.kube/config"
+    # Initialize effective_kubeconfig to ensure it's always defined
+    effective_kubeconfig: "{{ default_kubeconfig }}"
     
   pre_tasks:
     - name: Determine effective kubeconfig path
@@ -23,12 +25,7 @@
       ignore_errors: true
     
     # Fallback if the above fails in AWX
-    - name: Set default kubeconfig if effective_kubeconfig is undefined
-      set_fact:
-        effective_kubeconfig: "{{ default_kubeconfig }}"
-      when: effective_kubeconfig is not defined
-      delegate_to: localhost
-      run_once: true
+    # The effective_kubeconfig is now initialized in vars to prevent undefined issues
     
     - name: Check if source kubeconfig exists
       stat:
