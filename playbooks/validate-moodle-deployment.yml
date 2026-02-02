@@ -9,16 +9,17 @@
     source_kubeconfig: "/home/ansible/.kube/config"
     # Try KUBECONFIG env var first, then check if source exists, fallback to error
     kubeconfig_path: >-
-      {{ lookup('env', 'KUBECONFIG') | default( 
-        (source_kubeconfig if (lookup('file', source_kubeconfig, errors='ignore') | length > 0) else '/dev/null'), 
-        true 
+      {{ lookup('env', 'KUBECONFIG') | default(
+        (source_kubeconfig if (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0) else '/dev/null'),
+        true
       ) }}
   
   pre_tasks:
     - name: Check available kubeconfig options
       set_fact:
         env_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}"
-        source_kubeconfig_exists: "{{ (lookup('file', source_kubeconfig, errors='ignore') | length > 0) }}"
+        source_kubeconfig_content: "{{ lookup('file', source_kubeconfig, errors='ignore') | default('') }}"
+        source_kubeconfig_exists: "{{ (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0) }}"
       delegate_to: localhost
       run_once: true
     
