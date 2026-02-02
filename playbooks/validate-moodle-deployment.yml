@@ -6,6 +6,10 @@
   
   vars:
     moodle_namespace: "moodle"
+    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default('/home/ansible/.kube/config', true) }}"
+  
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
     
   tasks:
     - name: Check if moodle namespace exists
@@ -15,9 +19,44 @@
       register: namespace_info
       ignore_errors: true
       
+    - name: Debug namespace_info structure
+      debug:
+        var: namespace_info
+        verbosity: 1
+      
+    - name: Check if Kubernetes connection is working
+      fail:
+        msg: |
+          Cannot connect to Kubernetes cluster.
+          Current KUBECONFIG path: {{ kubeconfig_path }}
+          Error: {{ namespace_info.msg | default('Unknown connection error') }}
+          
+          Please ensure:
+          1. The kubeconfig file exists at the specified path
+          2. The file has proper permissions
+          3. The Kubernetes API server is accessible
+          
+          You can override the kubeconfig path by setting the KUBECONFIG environment variable:
+          KUBECONFIG=/path/to/your/kubeconfig ansible-playbook ...
+      when: namespace_info is failed or (namespace_info.get('failed', False) and ("Connection refused" in namespace_info.get('msg', '') or "no such file" in namespace_info.get('msg', '') or "cannot read" in namespace_info.get('msg', '')))
+      
     - name: Set namespace existence fact
       set_fact:
         namespace_exists: "{{ (namespace_info.resources | length > 0) if (namespace_info.get('resources') is defined and namespace_info.resources is not none) else (namespace_info.result.items | length > 0) if (namespace_info.get('result') is defined and namespace_info.result.get('items') is defined) else false }}"
+        k8s_connection_success: "{{ not (namespace_info.get('failed', False) or namespace_info is failed) }}"
+      
+    - name: Fail if Kubernetes connection failed
+      fail:
+        msg: |
+          Failed to connect to Kubernetes API.
+          Current KUBECONFIG path: {{ kubeconfig_path }}
+          Error details: {{ namespace_info | to_nice_json }}
+          
+          Troubleshooting steps:
+          1. Verify kubeconfig file exists: ls -la {{ kubeconfig_path }}
+          2. Test connection manually: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+          3. Check file permissions: Ensure readable by ansible user
+      when: not k8s_connection_success
       
     - name: Fail if namespace doesn't exist
       fail:
