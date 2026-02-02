@@ -6,37 +6,49 @@
   
   vars:
     moodle_namespace: "moodle"
-    source_kubeconfig: "/home/ansible/.kube/config"
     
   pre_tasks:
+    - name: Get KUBECONFIG environment variable
+      set_fact:
+        env_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('', true) }}"
+      delegate_to: localhost
+      run_once: true
+    
     - name: Determine effective kubeconfig path
       set_fact:
         effective_kubeconfig: >-
           {{
-            lookup('env', 'KUBECONFIG')
-            | default(
-                (source_kubeconfig
-                 if (source_kubeconfig | default('') | length > 0)
-                 and (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0)
-                 else '/dev/null'),
-                true
-            )
+            env_kubeconfig if (env_kubeconfig | default('') | length > 0)
+            else '/home/ansible/.kube/config'
           }}
+      delegate_to: localhost
+      run_once: true
+    
+    - name: Check if source kubeconfig exists
+      stat:
+        path: "/home/ansible/.kube/config"
+      register: source_kubeconfig_stat
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+    
+    - name: Adjust effective kubeconfig if source doesn't exist
+      set_fact:
+        effective_kubeconfig: "/dev/null"
+      when: env_kubeconfig | default('') | length == 0 and not source_kubeconfig_stat.stat.exists
       delegate_to: localhost
       run_once: true
     
     - name: Check available kubeconfig options
       set_fact:
-        env_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}"
-        source_kubeconfig_content: "{{ lookup('file', source_kubeconfig, errors='ignore') | default('') }}"
-        source_kubeconfig_exists: "{{ (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0) }}"
+        source_kubeconfig_exists: "{{ source_kubeconfig_stat.stat.exists | default(false) }}"
       delegate_to: localhost
       run_once: true
     
     - name: Display kubeconfig configuration
       debug:
         msg: |
-          KUBECONFIG environment variable: {{ env_kubeconfig }}
+          KUBECONFIG environment variable: {{ env_kubeconfig | default('Not set') }}
           Source kubeconfig (/home/ansible/.kube/config): {{ 'Exists' if source_kubeconfig_exists else 'Not accessible' }}
           Using kubeconfig path: {{ effective_kubeconfig }}
           
