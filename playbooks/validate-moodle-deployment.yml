@@ -40,7 +40,25 @@
     
     - name: Adjust effective kubeconfig if source doesn't exist
       set_fact:
-        effective_kubeconfig: "/dev/null"
+        effective_kubeconfig: "{{ default_kubeconfig }}"
+      when: env_kubeconfig | default('') | length == 0 and not source_kubeconfig_stat.stat.exists
+      delegate_to: localhost
+      run_once: true
+    
+    - name: Fail gracefully if no kubeconfig is accessible
+      fail:
+        msg: |
+          No accessible kubeconfig file found!
+          
+          Troubleshooting for AWX:
+          1. Make sure the default kubeconfig exists at: {{ default_kubeconfig }}
+          2. Or set KUBECONFIG as an extra variable in your AWX job template
+          3. Ensure the kubeconfig file is readable by the ansible user
+          4. Verify the file contains valid Kubernetes cluster configuration
+          
+          For CLI testing:
+          - Check: ls -la {{ default_kubeconfig }}
+          - Verify: kubectl --kubeconfig={{ default_kubeconfig }} get nodes
       when: env_kubeconfig | default('') | length == 0 and not source_kubeconfig_stat.stat.exists
       delegate_to: localhost
       run_once: true
