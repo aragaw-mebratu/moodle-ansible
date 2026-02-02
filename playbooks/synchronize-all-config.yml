@@ -1,0 +1,150 @@
+---
+- name: Synchronize All Ansible Configuration Files
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    moodle_namespace: "moodle"
+    dragonfly_namespace: "dragonfly-system"
+    
+  tasks:
+    - name: Update group variables with correct Redis password
+      lineinfile:
+        path: /opt/ansible/inventories/prod/group_vars/all.yml
+        regexp: '^dragonfly_password:'
+        line: 'dragonfly_password: "dragonfly"'
+        
+    - name: Update vault variables with correct Redis password
+      lineinfile:
+        path: /opt/ansible/inventories/prod/group_vars/vault.yml
+        regexp: '^dragonfly_password:'
+        line: 'dragonfly_password: "dragonfly"'
+        
+    - name: Update PHP-FPM configmap comments
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: moodle-php-fpm-config
+            namespace: "{{ moodle_namespace }}"
+          data:
+            www.conf: |
+              [www]
+              user = daemon
+              group = daemon
+              
+              listen = 127.0.0.1:9000
+              listen.backlog = 65535
+              
+              # Optimized for direct database connection
+              pm = dynamic
+              pm.max_children = 50          # Optimized for direct connection
+              pm.start_servers = 10
+              pm.min_spare_servers = 10
+              pm.max_spare_servers = 20
+              pm.max_requests = 1000        # Restart after 1000 requests
+              
+              # Process management
+              pm.process_idle_timeout = 30s
+              request_terminate_timeout = 180
+              request_slowlog_timeout = 30s
+              slowlog = /proc/self/fd/2
+              
+              # Output and environment
+              catch_workers_output = yes
+              clear_env = no
+              env[PATH] = /usr/local/bin:/usr/bin:/bin
+              env[TMP] = /tmp
+              env[TMPDIR] = /tmp
+              env[TEMP] = /tmp
+              
+              # Health checks
+              ping.path = /ping
+              pm.status_path = /status
+              
+              # Security
+              security.limit_extensions = .php .php3 .php4 .php5 .php7 .php8
+              
+              # Performance
+              rlimit_files = 65535
+              rlimit_core = 0
+              
+              # PHP settings via env
+              env[PHP_MEMORY_LIMIT] = 512M
+              env[PHP_MAX_EXECUTION_TIME] = 180
+              env[PHP_UPLOAD_MAX_FILESIZE] = 256M
+              env[PHP_POST_MAX_SIZE] = 256M
+        state: present
+        
+    - name: Update template with current working configuration
+      template:
+        src: /opt/ansible/templates/config.php.j2
+        dest: /tmp/config.php.sync
+        mode: '0644'
+      vars:
+        db_host: "moodle-db-cluster.database.svc.cluster.local"
+        db_name: "moodledb"
+        db_user: "moodleuser"
+        db_password: "PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw"
+        db_port: 5432
+        redis_host: "dragonfly-redis-master.dragonfly-system.svc.cluster.local"
+        redis_password: "dragonfly"
+        redis_port: 6379
+        
+    - name: Create synchronized configmap
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: moodle-config-synchronized
+            namespace: "{{ moodle_namespace }}"
+          data:
+            config.php: "{{ lookup('file', '/tmp/config.php.sync') }}"
+        state: present
+        
+    - name: Update deployment to use synchronized config
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: moodle
+            namespace: "{{ moodle_namespace }}"
+          spec:
+            template:
+              spec:
+                volumes:
+                  - name: moodle-config
+                    configMap:
+                      name: moodle-config-synchronized
+        state: present
+        merge_type: strategic-merge
+        
+    - name: Wait for deployment rollout
+      kubernetes.core.k8s:
+        kind: Deployment
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+        wait: true
+        wait_timeout: 600
+        
+    - name: Verify synchronization
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+      register: deployment_status
+      
+    - name: Display synchronization results
+      debug:
+        msg:
+          - "✅ All Ansible configuration files synchronized successfully!"
+          - "Deployment status: {{ deployment_status.resources[0].status.availableReplicas }}/{{ deployment_status.resources[0].status.replicas }} available"
+          - "Key updates applied:"
+          - "  - Redis password corrected to 'dragonfly'"
+          - "  - PHP-FPM comments updated for direct connection"
+          - "  - Template configuration synchronized"
+          - "  - All group variables updated"

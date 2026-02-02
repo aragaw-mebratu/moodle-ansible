@@ -1,23 +1,18 @@
-# playbooks/deploy-moodle.yml
 ---
-- name: Deploy Moodle via Helm
+- name: Update Moodle Helm Configuration with Correct Settings
   hosts: localhost
   gather_facts: false
+  vars_files:
+    - ../inventories/prod/group_vars/all.yml
+    - ../inventories/prod/group_vars/vault.yml
 
   tasks:
-    - name: Add Bitnami Helm repo
-      kubernetes.core.helm_repository:
-        name: bitnami
-        repo_url: https://charts.bitnami.com/bitnami
-
-    - name: Deploy Moodle
+    - name: Update Moodle Helm release
       kubernetes.core.helm:
         name: "{{ moodle.release_name }}"
         chart_ref: bitnami/moodle
         release_namespace: "{{ moodle.namespace }}"
-        create_namespace: true
         kubeconfig: "{{ kubeconfig }}"
-        timeout: 30m
         values:
           global:
             security:
@@ -27,18 +22,21 @@
             repository: aragawmebratu/moodle-with-tools
             tag: latest
 
+          replicaCount: "{{ moodle.replica_count }}"
+
+          moodleSkipInstall: true
+
           mariadb:
             enabled: false
 
+          # CORRECT PostgreSQL Pooler Configuration
           externalDatabase:
-            host: "{{ external_db.host }}"
-            port: "{{ external_db.port }}"
-            user: "{{ external_db.user }}"
-            password: "{{ external_db_password }}"
-            database: "{{ external_db.database }}"
-            type: "{{ external_db.type }}"
-
-          moodleSkipInstall: true
+            host: "moodle-db-cluster-pooler.database.svc.cluster.local"
+            port: 5432
+            user: "moodleuser"
+            password: "PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw"
+            database: "moodledb"
+            type: pgsql
 
           redis:
             enabled: false
@@ -47,8 +45,6 @@
             host: "{{ dragonfly.host }}"
             port: "{{ dragonfly.port }}"
             password: "{{ dragonfly_password }}"
-
-          replicaCount: "{{ moodle.replica_count }}"
 
           moodleUsername: admin
           moodlePassword: "{{ moodle_admin_password }}"
@@ -66,14 +62,10 @@
 
           resources: "{{ moodle.resources }}"
 
-          # =========================
-          # VOLUME CONFIGURATION
-          # =========================
           extraVolumes:
             - name: config
               configMap:
                 name: config
-
             - name: php-fpm-config
               configMap:
                 name: moodle-php-fpm-config
@@ -83,8 +75,23 @@
               mountPath: /bitnami/moodle/config.php
               subPath: config.php
               readOnly: true
-
             - name: php-fpm-config
               mountPath: /opt/bitnami/php/etc/php-fpm.d/www.conf
               subPath: www.conf
               readOnly: true
+
+    - name: Wait for Moodle deployment rollout
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ moodle.namespace }}"
+        name: moodle
+      register: deployment_status
+      until: >
+        deployment_status.resources[0].status.updatedReplicas == moodle.replica_count|int and
+        deployment_status.resources[0].status.readyReplicas == moodle.replica_count|int
+      retries: 30
+      delay: 10
+
+    - name: Verify Moodle pods are running
+      debug:
+        msg: "Moodle deployment updated successfully. Pods should be starting with correct configuration."

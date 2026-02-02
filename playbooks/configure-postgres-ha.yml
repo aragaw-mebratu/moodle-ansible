@@ -1,0 +1,142 @@
+---
+- name: Configure PostgreSQL for High Load
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../inventories/prod/group_vars/all.yml
+    - ../inventories/prod/group_vars/vault.yml
+
+  tasks:
+    - name: Check if PostgreSQL cluster exists
+      kubernetes.core.k8s_info:
+        kind: postgresql
+        api_version: acid.zalan.do/v1
+        namespace: database
+        name: moodle-db-cluster
+      register: postgres_cluster
+
+    - name: Display current PostgreSQL configuration
+      debug:
+        msg: "Current PostgreSQL cluster: {{ postgres_cluster.resources[0].spec | to_nice_yaml }}"
+
+    - name: Get PostgreSQL pooler service
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: database
+        label_selectors:
+          - "application=spilo"
+          - "cluster-name=moodle-db-cluster"
+      register: postgres_services
+
+    - name: Find pooler service
+      set_fact:
+        pooler_service: "{{ postgres_services.resources | selectattr('metadata.name', 'match', '.*pooler.*') | list }}"
+        primary_service: "{{ postgres_services.resources | selectattr('metadata.name', 'match', 'moodle-db-cluster') | list | first }}"
+
+    - name: Display service information
+      debug:
+        msg:
+          - "Total PostgreSQL services: {{ postgres_services.resources | length }}"
+          - "Pooler services found: {{ pooler_service | length }}"
+          - "Primary service: {{ primary_service.metadata.name if primary_service else 'Not found' }}"
+          - "Pooler service: {{ pooler_service[0].metadata.name if pooler_service else 'Not found' }}"
+
+    - name: Update PostgreSQL cluster configuration for high load
+      kubernetes.core.k8s:
+        state: present
+        namespace: database
+        definition:
+          apiVersion: "acid.zalan.do/v1"
+          kind: postgresql
+          metadata:
+            name: moodle-db-cluster
+            namespace: database
+          spec:
+            teamId: "moodle"
+            volume:
+              size: 200Gi
+              storageClass: rook-ceph-block
+            numberOfInstances: 5
+            postgresql:
+              version: "15"
+              parameters:
+                max_connections: "500"
+                max_prepared_transactions: "250"
+                shared_buffers: "8GB"
+                work_mem: "32MB"
+                maintenance_work_mem: "2GB"
+                effective_cache_size: "16GB"
+                random_page_cost: "1.1"
+                checkpoint_completion_target: "0.9"
+                wal_buffers: "32MB"
+                default_statistics_target: "500"
+                max_worker_processes: "16"
+                max_parallel_workers_per_gather: "8"
+                max_parallel_workers: "16"
+                max_parallel_maintenance_workers: "8"
+                checkpoint_timeout: "15min"
+                max_wal_size: "8GB"
+                min_wal_size: "2GB"
+                idle_in_transaction_session_timeout: "30000"
+                statement_timeout: "30000"
+                lock_timeout: "10000"
+            resources:
+              requests:
+                cpu: "4000m"
+                memory: "12Gi"
+              limits:
+                cpu: "8000m"
+                memory: "16Gi"
+            databases:
+              moodledb: moodleuser
+            users:
+              moodleuser:
+              - superuser
+              - createdb
+            enableConnectionPooler: true
+            connectionPooler:
+              mode: "transaction"
+              numberOfInstances: 3
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "1Gi"
+              parameters:
+                max_client_conn: "1000"
+                default_pool_size: "100"
+                min_pool_size: "20"
+                reserve_pool_size: "50"
+                pool_mode: "transaction"
+                server_idle_timeout: "300"
+                server_lifetime: "3600"
+                server_connect_timeout: "15"
+                server_login_retry: "2"
+            enableLogicalBackup: true
+            logicalBackupSchedule: "0 2 * * *"
+            logicalBackupRetention: "30d"
+
+    - name: Wait for pooler to be created
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: database
+        label_selectors:
+          - "application=spilo"
+          - "cluster-name=moodle-db-cluster"
+          - "spilo-role=pooler"
+      register: pooler_check
+      until: pooler_check.resources | length >= 1
+      retries: 20
+      delay: 10
+      ignore_errors: true
+
+    - name: Display final pooler information
+      debug:
+        msg: |
+          After configuration update:
+          - Pooler service should be: moodle-db-cluster-pooler.database.svc.cluster.local:5432
+          - Use this in Moodle config.php
+          - Existing connection string: moodle-db-cluster.database.svc.cluster.local:5432 (direct)
+          - New connection string: moodle-db-cluster-pooler.database.svc.cluster.local:5432 (via pooler)

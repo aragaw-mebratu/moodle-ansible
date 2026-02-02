@@ -3,13 +3,13 @@
   hosts: localhost
   connection: local
   gather_facts: no
-  
+
   vars:
     moodle_namespace: moodle
-    # Bitnami Moodle typically uses this path for PHP-FPM config
-    php_fpm_conf_path: "/opt/bitnami/php/etc/php-fpm.d/www.conf"
-    
-    pm_type: "dynamic"
+    moodle_container: moodle   # 👈 IMPORTANT (Bitnami container name)
+    php_fpm_conf_path: /opt/bitnami/php/etc/php-fpm.d/www.conf
+
+    pm_type: dynamic
     max_children: 500
     start_servers: 50
     min_spare_servers: 50
@@ -17,179 +17,77 @@
     max_requests: 1000
 
   tasks:
-    - name: Discover all Moodle pods in the namespace
+    - name: Discover Moodle pods
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ moodle_namespace }}"
         label_selectors:
-          - "app.kubernetes.io/name=moodle"
+          - app.kubernetes.io/name=moodle
       register: moodle_pods_info
 
-    - name: Set Moodle pods list filtered by pod name
+    - name: Extract pod names
       set_fact:
         moodle_pods: "{{ moodle_pods_info.resources | map(attribute='metadata.name') | list }}"
 
-    - name: Show discovered Moodle pods
-      debug:
+    - debug:
         var: moodle_pods
 
-    - name: Test container shell access first
+    - name: Test exec access
       kubernetes.core.k8s_exec:
         namespace: "{{ moodle_namespace }}"
         pod: "{{ moodle_pods[0] }}"
+        container: "{{ moodle_container }}"
         command:
           - sh
           - -c
-          - "echo 'Testing container access' && ls -la /opt/bitnami"
-      register: test_access
-      ignore_errors: yes
+          - "id && ls /opt/bitnami/php/etc/php-fpm.d"
+      register: exec_test
 
-    - name: Debug test result
+    - debug:
+        var: exec_test.stdout_lines
+
+    - name: Update PHP-FPM config
+      kubernetes.core.k8s_exec:
+        namespace: "{{ moodle_namespace }}"
+        pod: "{{ item }}"
+        container: "{{ moodle_container }}"
+        command:
+          - sh
+          - -c
+          - |
+            set -e
+            CONFIG="{{ php_fpm_conf_path }}"
+            cp "$CONFIG" "$CONFIG.bak"
+
+            sed -i \
+              -e "s/^pm =.*/pm = {{ pm_type }}/" \
+              -e "s/^pm.max_children =.*/pm.max_children = {{ max_children }}/" \
+              -e "s/^pm.start_servers =.*/pm.start_servers = {{ start_servers }}/" \
+              -e "s/^pm.min_spare_servers =.*/pm.min_spare_servers = {{ min_spare_servers }}/" \
+              -e "s/^pm.max_spare_servers =.*/pm.max_spare_servers = {{ max_spare_servers }}/" \
+              -e "s/^;*pm.max_requests =.*/pm.max_requests = {{ max_requests }}/" \
+              "$CONFIG"
+
+            echo "Updated PHP-FPM config:"
+            grep '^pm' "$CONFIG"
+      loop: "{{ moodle_pods }}"
+
+    - name: Verify PHP-FPM config
+      kubernetes.core.k8s_exec:
+        namespace: "{{ moodle_namespace }}"
+        pod: "{{ item }}"
+        container: "{{ moodle_container }}"
+        command:
+          - sh
+          - -c
+          - |
+            echo "---- {{ item }} ----"
+            grep '^pm' "{{ php_fpm_conf_path }}"
+      loop: "{{ moodle_pods }}"
+
+    - name: Reminder
       debug:
-        var: test_access
-
-    - name: Check PHP-FPM config file existence
-      kubernetes.core.k8s_exec:
-        namespace: "{{ moodle_namespace }}"
-        pod: "{{ moodle_pods[0] }}"
-        command:
-          - sh
-          - -c
-          - |
-            echo "Looking for PHP-FPM config..."
-            find / -name "*www.conf*" 2>/dev/null | head -5
-            echo "Checking /opt/bitnami/php directory..."
-            ls -la /opt/bitnami/php/etc/ 2>/dev/null || echo "Directory not found"
-            echo "Checking /etc/php directory..."
-            ls -la /etc/php*/ 2>/dev/null || echo "Directory not found"
-      register: find_config
-      ignore_errors: yes
-
-    - name: Debug config search
-      debug:
-        var: find_config.stdout
-
-    # Option 1: Direct sed approach (if bash/sed are available)
-    - name: Update PHP-FPM settings directly (method 1)
-      kubernetes.core.k8s_exec:
-        namespace: "{{ moodle_namespace }}"
-        pod: "{{ item }}"
-        command:
-          - sh
-          - -c
-          - |
-            CONFIG_FILE="{{ php_fpm_conf_path }}"
-            # Backup first
-            cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
-            # Update settings
-            sed -i.bak -e "s/^pm\s*=.*/pm = {{ pm_type }}/" \
-                       -e "s/^pm.max_children\s*=.*/pm.max_children = {{ max_children }}/" \
-                       -e "s/^pm.start_servers\s*=.*/pm.start_servers = {{ start_servers }}/" \
-                       -e "s/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = {{ min_spare_servers }}/" \
-                       -e "s/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = {{ max_spare_servers }}/" \
-                       -e "s/^;*pm.max_requests\s*=.*/pm.max_requests = {{ max_requests }}/" \
-                       "$CONFIG_FILE"
-            echo "Updated config file. Diff:"
-            diff -u "$CONFIG_FILE.bak" "$CONFIG_FILE" || true
-      loop: "{{ moodle_pods }}"
-      when: find_config.stdout is defined and 'www.conf' in find_config.stdout
-      ignore_errors: yes
-
-    # Option 2: Use cat and echo if sed isn't available
-    - name: Update PHP-FPM settings using cat (method 2)
-      kubernetes.core.k8s_exec:
-        namespace: "{{ moodle_namespace }}"
-        pod: "{{ item }}"
-        command:
-          - sh
-          - -c
-          - |
-            CONFIG_FILE="{{ php_fpm_conf_path }}"
-            # Create a temporary file with new settings
-            cat > /tmp/new_www.conf << 'EOF'
-            ; Bitnami Moodle PHP-FPM configuration tuned by Ansible
-            [www]
-            user = daemon
-            group = daemon
-            listen = 0.0.0.0:9000
-            listen.owner = daemon
-            listen.group = daemon
-            pm = {{ pm_type }}
-            pm.max_children = {{ max_children }}
-            pm.start_servers = {{ start_servers }}
-            pm.min_spare_servers = {{ min_spare_servers }}
-            pm.max_spare_servers = {{ max_spare_servers }}
-            pm.max_requests = {{ max_requests }}
-            pm.process_idle_timeout = 10s
-            pm.status_path = /status
-            ping.path = /ping
-            ping.response = pong
-            request_terminate_timeout = 300
-            request_slowlog_timeout = 0
-            slowlog = /opt/bitnami/php/logs/www-slow.log
-            EOF
-            
-            # Backup and replace
-            cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
-            cat /tmp/new_www.conf > "$CONFIG_FILE"
-            echo "Config file replaced with tuned settings"
-      loop: "{{ moodle_pods }}"
-      when: find_config.stdout is defined and 'www.conf' in find_config.stdout
-      ignore_errors: yes
-
-    # Try different reload methods
-    - name: Reload PHP-FPM service
-      kubernetes.core.k8s_exec:
-        namespace: "{{ moodle_namespace }}"
-        pod: "{{ item }}"
-        command:
-          - sh
-          - -c
-          - |
-            # Try different reload methods
-            echo "Attempting to reload PHP-FPM..."
-            
-            # Method 1: systemctl (if available)
-            if command -v systemctl >/dev/null 2>&1; then
-              systemctl reload php-fpm && echo "Reloaded via systemctl" || echo "systemctl failed"
-            fi
-            
-            # Method 2: kill -USR2 (send signal to master process)
-            if [ -f /run/php-fpm.pid ]; then
-              PID=$(cat /run/php-fpm.pid)
-              kill -USR2 "$PID" && echo "Sent USR2 signal to PID $PID" || echo "Failed to send signal"
-            fi
-            
-            # Method 3: Find and kill
-            if pgrep php-fpm >/dev/null; then
-              pkill -USR2 php-fpm && echo "Sent USR2 to php-fpm processes" || echo "pkill failed"
-            fi
-            
-            # Method 4: Full restart (less graceful)
-            if command -v php-fpm >/dev/null 2>&1; then
-              pkill php-fpm
-              sleep 2
-              php-fpm --daemonize && echo "Restarted php-fpm" || echo "Failed to restart"
-            fi
-      loop: "{{ moodle_pods }}"
-      ignore_errors: yes
-
-    - name: Verify PHP-FPM settings
-      kubernetes.core.k8s_exec:
-        namespace: "{{ moodle_namespace }}"
-        pod: "{{ item }}"
-        command:
-          - sh
-          - -c
-          - |
-            echo "Current PHP-FPM settings in {{ php_fpm_conf_path }}:"
-            echo "=========================================="
-            grep -E '^(pm|pm\.|^listen|^user|^group)' "{{ php_fpm_conf_path }}" || echo "Could not read config file"
-            echo "=========================================="
-            echo "PHP-FPM processes:"
-            ps aux | grep -E '(php-fpm|php)' | grep -v grep || echo "No PHP-FPM processes found"
-      loop: "{{ moodle_pods }}"
-
-    - name: Completed message
-      debug:
-        msg: "PHP-FPM tuning attempted on Moodle pods: {{ moodle_pods }}"
+        msg: >
+          PHP-FPM config updated inside running pods.
+          NOTE: Changes will be LOST if pods restart.
+          Use ConfigMaps or Helm for persistence.

@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: moodle-php-fpm-config
+  namespace: moodle
+data:
+  www.conf: |
+    [www]
+    user = daemon
+    group = daemon
+    
+    listen = 127.0.0.1:9000
+    listen.backlog = 65535
+    
+    # Optimized for direct database connection
+    pm = dynamic
+    pm.max_children = 50          # Optimized for direct connection
+    pm.start_servers = 10
+    pm.min_spare_servers = 10
+    pm.max_spare_servers = 20
+    pm.max_requests = 1000        # Restart after 1000 requests
+    
+    # Process management
+    pm.process_idle_timeout = 30s
+    request_terminate_timeout = 180
+    request_slowlog_timeout = 30s
+    slowlog = /proc/self/fd/2
+    
+    # Output and environment
+    catch_workers_output = yes
+    clear_env = no
+    env[PATH] = /usr/local/bin:/usr/bin:/bin
+    env[TMP] = /tmp
+    env[TMPDIR] = /tmp
+    env[TEMP] = /tmp
+    
+    # Health checks
+    ping.path = /ping
+    pm.status_path = /status
+    
+    # Security
+    security.limit_extensions = .php .php3 .php4 .php5 .php7 .php8
+    
+    # Performance
+    rlimit_files = 65535
+    rlimit_core = 0
+    
+    # PHP settings via env
+    env[PHP_MEMORY_LIMIT] = 512M
+    env[PHP_MAX_EXECUTION_TIME] = 180
+    env[PHP_UPLOAD_MAX_FILESIZE] = 256M
+    env[PHP_POST_MAX_SIZE] = 256M

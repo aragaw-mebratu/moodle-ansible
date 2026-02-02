@@ -1,0 +1,33 @@
+---
+- name: Complete Moodle Deployment with Working Configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    moodle_namespace: "moodle"
+    
+  tasks:
+    - name: Deploy Moodle with working configuration
+      import_tasks: deploy-moodle-working-config.yml
+      
+    - name: Validate deployment
+      import_tasks: validate-moodle-deployment.yml
+      
+    - name: Display final success message
+      debug:
+        msg: 
+          - "🎉 MOODLE DEPLOYMENT COMPLETED SUCCESSFULLY! 🎉"
+          - ""
+          - "Key fixes applied:"
+          - "  ✅ Direct database connection (no pooler)"
+          - "  ✅ Corrected Redis password"
+          - "  ✅ Hardcoded database credentials"
+          - "  ✅ Optimized performance settings"
+          - ""
+          - "Access your Moodle instance at:"
+          - "  http://<NODE_IP>:31203/login/index.php"
+          - ""
+          - "Admin credentials:"
+          - "  Username: admin"
+          - "  Password: admin123"

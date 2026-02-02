@@ -1,17 +1,17 @@
+# playbooks/apply-moodle-config.yml (updated)
 ---
-- name: Apply Moodle config.php via ConfigMap
+- name: Apply Moodle ConfigMaps
   hosts: localhost
   gather_facts: false
-
   tasks:
-    - name: Render Moodle config.php
-      ansible.builtin.template:
-        src: templates/config.php.j2
-        dest: /tmp/config.php
-
-    - name: Create / update Moodle ConfigMap
+    - name: Create moodle-php-fpm-config ConfigMap
       kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('file', 'php-fpm-configmap.yml') | from_yaml }}"
         kubeconfig: "{{ kubeconfig }}"
+
+    - name: Create config ConfigMap from template
+      kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: v1
@@ -20,4 +20,6 @@
             name: config
             namespace: "{{ moodle.namespace }}"
           data:
-            config.php: "{{ lookup('file', '/tmp/config.php') }}"
+            config.php: |
+              {{ lookup('template', '../templates/config.php.j2') | indent(14) }}
+        kubeconfig: "{{ kubeconfig }}"

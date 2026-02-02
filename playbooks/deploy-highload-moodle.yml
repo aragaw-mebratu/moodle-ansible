@@ -1,0 +1,114 @@
+---
+- name: Configure PostgreSQL for High Load
+  import_playbook: configure-postgres-ha.yml
+
+- name: Wait for PostgreSQL pooler to be ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: database
+    label_selectors:
+      - "application=spilo,cluster-name=moodle-db-cluster,spilo-role=pooler"
+  register: pooler_pods
+  until: pooler_pods.resources | length >= 3
+  retries: 10
+  delay: 10
+
+- name: Apply Moodle Configurations with Pooler Settings
+  import_playbook: apply-moodle-config.yml
+
+- name: Update Moodle deployment with optimized settings
+  kubernetes.core.helm:
+    name: "{{ moodle.release_name }}"
+    chart_ref: bitnami/moodle
+    release_namespace: "{{ moodle.namespace }}"
+    kubeconfig: "{{ kubeconfig }}"
+    update_repo_cache: true
+    values:
+      global:
+        security:
+          allowInsecureImages: true
+
+      image:
+        repository: aragawmebratu/moodle-with-tools
+        tag: latest
+        pullPolicy: Always
+
+      replicaCount: 3
+
+      # Use PostgreSQL pooler
+      externalDatabase:
+        host: "moodle-db-cluster-pooler.database.svc.cluster.local"  # Pooler service
+        port: 5432
+        user: "{{ external_db.user }}"
+        password: "{{ external_db_password }}"
+        database: "{{ external_db.database }}"
+        type: pgsql
+
+      # Optimized resources
+      resources:
+        requests:
+          cpu: "1000m"
+          memory: "4Gi"
+        limits:
+          cpu: "2000m"
+          memory: "6Gi"
+
+      # PHP configuration
+      phpConfiguration:
+        max_execution_time: 180
+        max_input_time: 120
+        memory_limit: 512M
+        upload_max_filesize: 256M
+        post_max_size: 256M
+        max_file_uploads: 50
+        opcache:
+          enable: true
+          memory_consumption: 256
+          max_accelerated_files: 10000
+          validate_timestamps: false
+          save_comments: true
+
+      # Enable Redis session and cache
+      externalRedis:
+        host: "{{ dragonfly.host }}"
+        port: "{{ dragonfly.port }}"
+        password: "{{ dragonfly_password }}"
+
+      # Configure PHP-FPM
+      extraVolumes:
+        - name: php-fpm-config
+          configMap:
+            name: moodle-php-fpm-config
+        - name: config
+          configMap:
+            name: config
+
+      extraVolumeMounts:
+        - name: php-fpm-config
+          mountPath: /opt/bitnami/php/etc/php-fpm.d/www.conf
+          subPath: www.conf
+          readOnly: true
+        - name: config
+          mountPath: /bitnami/moodle/config.php
+          subPath: config.php
+          readOnly: true
+
+      # Health checks
+      livenessProbe:
+        enabled: true
+        initialDelaySeconds: 300
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+
+      readinessProbe:
+        enabled: true
+        initialDelaySeconds: 30
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 6
+
+      # Pod disruption budget for HA
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 2

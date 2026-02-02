@@ -1,0 +1,6 @@
+---
+- name: Apply Moodle Configurations
+  import_playbook: apply-moodle-config.yml
+
+- name: Deploy Moodle
+  import_playbook: deploy-moodle.yml

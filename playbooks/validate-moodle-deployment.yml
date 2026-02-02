@@ -1,0 +1,97 @@
+---
+- name: Validate Moodle Deployment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    moodle_namespace: "moodle"
+    
+  tasks:
+    - name: Check if moodle namespace exists
+      kubernetes.core.k8s_info:
+        kind: Namespace
+        name: "{{ moodle_namespace }}"
+      register: namespace_info
+      ignore_errors: true
+      
+    - name: Fail if namespace doesn't exist
+      fail:
+        msg: "Moodle namespace '{{ moodle_namespace }}' does not exist"
+      when: namespace_info.resources | length == 0
+      
+    - name: Check deployment status
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+      register: deployment_info
+      
+    - name: Check pod status
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ moodle_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=moodle
+      register: pod_info
+      
+    - name: Check service status
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+      register: service_info
+      
+    - name: Count ready pods
+      set_fact:
+        total_pods: "{{ pod_info.resources | length }}"
+        
+    - name: Count ready containers
+      set_fact:
+        ready_pods: "{{ ((pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) | length) if (pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) else 0 }}"
+        
+    - name: Check database secret
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: moodle-externaldb
+        namespace: "{{ moodle_namespace }}"
+      register: secret_info
+      
+    - name: Check configmap
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        name: moodle-config-working
+        namespace: "{{ moodle_namespace }}"
+      register: configmap_info
+      ignore_errors: true
+      
+    - name: Display validation results
+      debug:
+        msg:
+          - "=== MOODLE DEPLOYMENT VALIDATION ==="
+          - "Namespace: {{ '✓ Present' if namespace_info.resources | length > 0 else '✗ Missing' }}"
+          - "Deployment: {{ '✓ Available' if deployment_info.resources[0].status.availableReplicas is defined and deployment_info.resources[0].status.availableReplicas > 0 else '✗ Not Available' }}"
+          - "Pods: {{ ready_pods }}/{{ total_pods }} ready"
+          - "Service: {{ '✓ Present' if service_info.resources | length > 0 else '✗ Missing' }}"
+          - "Database Secret: {{ '✓ Present' if secret_info.resources | length > 0 else '✗ Missing' }}"
+          - "ConfigMap: {{ '✓ Present' if configmap_info.resources | length > 0 else '✗ Missing' }}"
+          - ""
+          - "=== ACCESS INFORMATION ==="
+          - "NodePort: {{ service_info.resources[0].spec.ports[0].nodePort | default('Unknown') }}"
+          - "ClusterIP: {{ service_info.resources[0].spec.clusterIP | default('Unknown') }}"
+          
+    - name: Fail if deployment is not healthy
+      fail:
+        msg: "Moodle deployment is not healthy. Check the status above."
+      when: >
+        deployment_info.resources[0].status.availableReplicas is not defined or 
+        deployment_info.resources[0].status.availableReplicas == 0 or
+        ready_pods == "0"
+        
+    - name: Success message
+      debug:
+        msg: "✅ Moodle deployment validation successful!"
+      when: >
+        deployment_info.resources[0].status.availableReplicas is defined and
+        deployment_info.resources[0].status.availableReplicas > 0 and
+        ready_pods != "0"

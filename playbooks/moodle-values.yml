@@ -1,0 +1,59 @@
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  repository: aragawmebratu/moodle-with-tools
+  tag: latest
+
+replicaCount: 3
+
+moodleSkipInstall: true
+
+mariadb:
+  enabled: false
+
+externalDatabase:
+  host: "{{ external_db.host }}"
+  port: "{{ external_db.port }}"
+  user: "{{ external_db.user }}"
+  password: "{{ external_db_password }}"
+  database: "{{ external_db.database }}"
+  type: "{{ external_db.type }}"
+
+redis:
+  enabled: false
+
+externalRedis:
+  host: "{{ dragonfly.host }}"
+  port: "{{ dragonfly.port }}"
+  password: "{{ dragonfly_password }}"
+
+moodleUsername: admin
+moodlePassword: "{{ moodle_admin_password }}"
+moodleEmail: admin@example.com
+
+service:
+  type: "{{ moodle.service.type }}"
+  nodePort: "{{ moodle.service.nodePort }}"
+
+persistence:
+  enabled: "{{ moodle.persistence.enabled }}"
+  size: "{{ moodle.persistence.size }}"
+  storageClass: "{{ moodle.persistence.storageClass }}"
+  accessModes: "{{ moodle.persistence.accessModes }}"
+
+resources: "{{ moodle.resources }}"
+
+# 👇 PHP-FPM CONFIG INJECTION
+extraVolumes:
+  - name: php-fpm-config
+    configMap:
+      name: moodle-php-fpm-config
+
+extraVolumeMounts:
+  - name: php-fpm-config
+    mountPath: /opt/bitnami/php/etc/php-fpm.d/www.conf
+    subPath: www.conf
+    readOnly: true
+# 👆 PHP-FPM CONFIG INJECTION

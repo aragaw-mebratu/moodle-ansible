@@ -1,0 +1,13 @@
+serviceAccount:
+  create: false
+  name: awx-k8s-admin
+
+image:
+  repository: ghcr.io/your-org/awx-ee-k8s
+  tag: latest
+
+extraEnv:
+  - name: KUBECONFIG
+    value: /var/run/secrets/kubernetes.io/serviceaccount
+
+
