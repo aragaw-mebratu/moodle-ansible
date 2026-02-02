@@ -6,7 +6,21 @@
   
   vars:
     moodle_namespace: "moodle"
-    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default('/home/ansible/.kube/config', true) }}"
+    source_kubeconfig: "/home/ansible/.kube/config"
+    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default(source_kubeconfig, true) }}"
+  
+  pre_tasks:
+    - name: Verify source kubeconfig exists
+      stat:
+        path: "{{ source_kubeconfig }}"
+      register: kubeconfig_stat
+      delegate_to: localhost
+      run_once: true
+    
+    - name: Fail if source kubeconfig does not exist
+      fail:
+        msg: "Source kubeconfig file {{ source_kubeconfig }} does not exist. Please ensure Kubernetes is properly configured."
+      when: not kubeconfig_stat.stat.exists
   
   environment:
     KUBECONFIG: "{{ kubeconfig_path }}"
@@ -16,8 +30,10 @@
       kubernetes.core.k8s_info:
         kind: Namespace
         name: "{{ moodle_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
       register: namespace_info
       ignore_errors: true
+      delegate_to: localhost
       
     - name: Debug namespace_info structure
       debug:
@@ -31,14 +47,12 @@
           Current KUBECONFIG path: {{ kubeconfig_path }}
           Error: {{ namespace_info.msg | default('Unknown connection error') }}
           
-          Please ensure:
-          1. The kubeconfig file exists at the specified path
-          2. The file has proper permissions
-          3. The Kubernetes API server is accessible
-          
-          You can override the kubeconfig path by setting the KUBECONFIG environment variable:
+          This playbook includes an embedded kubeconfig for AWX compatibility.
+          If you're running this outside of AWX, you can override the kubeconfig path:
           KUBECONFIG=/path/to/your/kubeconfig ansible-playbook ...
-      when: namespace_info is failed or (namespace_info.get('failed', False) and ("Connection refused" in namespace_info.get('msg', '') or "no such file" in namespace_info.get('msg', '') or "cannot read" in namespace_info.get('msg', '')))
+          
+          For AWX: Ensure the playbook has proper permissions to create temporary files.
+      when: namespace_info is failed or (namespace_info.get('failed', False) and ("Connection refused" in namespace_info.get('msg', '') or "no such file" in namespace_info.get('msg', '') or "cannot read" in namespace_info.get('msg', '') or "Invalid kube-config" in namespace_info.get('msg', '')))
       
     - name: Set namespace existence fact
       set_fact:
@@ -50,12 +64,13 @@
         msg: |
           Failed to connect to Kubernetes API.
           Current KUBECONFIG path: {{ kubeconfig_path }}
-          Error details: {{ namespace_info | to_nice_json }}
+          Error details: {{ namespace_info.msg | default('Connection failed') }}
           
           Troubleshooting steps:
-          1. Verify kubeconfig file exists: ls -la {{ kubeconfig_path }}
-          2. Test connection manually: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
-          3. Check file permissions: Ensure readable by ansible user
+          1. For AWX: Check if the container can write to /tmp directory
+          2. For CLI: Verify kubeconfig file exists: ls -la {{ kubeconfig_path }}
+          3. Test connection manually: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+          4. Check file permissions: Ensure readable by ansible user
       when: not k8s_connection_success
       
     - name: Fail if namespace doesn't exist
@@ -68,7 +83,9 @@
         kind: Deployment
         name: moodle
         namespace: "{{ moodle_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
       register: deployment_info
+      delegate_to: localhost
       
     - name: Set deployment status fact
       set_fact:
@@ -81,7 +98,9 @@
         namespace: "{{ moodle_namespace }}"
         label_selectors:
           - app.kubernetes.io/name=moodle
+        kubeconfig: "{{ kubeconfig_path }}"
       register: pod_info
+      delegate_to: localhost
       
     - name: Set pod facts
       set_fact:
@@ -93,7 +112,9 @@
         kind: Service
         name: moodle
         namespace: "{{ moodle_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
       register: service_info
+      delegate_to: localhost
       
     - name: Set service facts
       set_fact:
@@ -105,7 +126,9 @@
         kind: Secret
         name: moodle-externaldb
         namespace: "{{ moodle_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
       register: secret_info
+      delegate_to: localhost
       
     - name: Set secret facts
       set_fact:
@@ -116,8 +139,10 @@
         kind: ConfigMap
         name: moodle-config-synchronized
         namespace: "{{ moodle_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
       register: configmap_info
       ignore_errors: true
+      delegate_to: localhost
       
     - name: Set configmap facts
       set_fact:
