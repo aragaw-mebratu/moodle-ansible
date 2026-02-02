@@ -7,14 +7,24 @@
   vars:
     moodle_namespace: "moodle"
     source_kubeconfig: "/home/ansible/.kube/config"
-    # Try KUBECONFIG env var first, then check if source exists, fallback to error
-    kubeconfig_path: >-
-      {{ lookup('env', 'KUBECONFIG') | default(
-        (source_kubeconfig if (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0) else '/dev/null'),
-        true
-      ) }}
-  
+    
   pre_tasks:
+    - name: Determine effective kubeconfig path
+      set_fact:
+        effective_kubeconfig: >-
+          {{
+            lookup('env', 'KUBECONFIG')
+            | default(
+                (source_kubeconfig
+                 if (source_kubeconfig | default('') | length > 0)
+                 and (lookup('file', source_kubeconfig, errors='ignore') | default('') | length > 0)
+                 else '/dev/null'),
+                true
+            )
+          }}
+      delegate_to: localhost
+      run_once: true
+    
     - name: Check available kubeconfig options
       set_fact:
         env_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}"
@@ -28,7 +38,7 @@
         msg: |
           KUBECONFIG environment variable: {{ env_kubeconfig }}
           Source kubeconfig (/home/ansible/.kube/config): {{ 'Exists' if source_kubeconfig_exists else 'Not accessible' }}
-          Using kubeconfig path: {{ kubeconfig_path }}
+          Using kubeconfig path: {{ effective_kubeconfig }}
           
           Configuration priority:
           1. KUBECONFIG environment variable (if set)
@@ -37,16 +47,17 @@
           
           For AWX: Set KUBECONFIG as an extra variable in your job template
           pointing to your kubeconfig file location.
-  
-  environment:
-    KUBECONFIG: "{{ kubeconfig_path }}"
+      
+
     
   tasks:
     - name: Check if moodle namespace exists
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: Namespace
         name: "{{ moodle_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: namespace_info
       ignore_errors: true
       delegate_to: localhost
@@ -60,7 +71,7 @@
       fail:
         msg: |
           Cannot connect to Kubernetes cluster.
-          Current KUBECONFIG path: {{ kubeconfig_path }}
+          Current KUBECONFIG path: {{ effective_kubeconfig }}
           Error: {{ namespace_info.msg | default('Unknown connection error') }}
           
           Troubleshooting for AWX:
@@ -82,7 +93,7 @@
       fail:
         msg: |
           Failed to connect to Kubernetes API.
-          Current KUBECONFIG path: {{ kubeconfig_path }}
+          Current KUBECONFIG path: {{ effective_kubeconfig }}
           Error details: {{ namespace_info.msg | default('Connection failed') }}
           
           AWX Configuration Required:
@@ -95,7 +106,7 @@
           - Containing valid Kubernetes cluster credentials
           
           CLI testing command:
-          KUBECONFIG={{ kubeconfig_path }} kubectl get nodes
+          KUBECONFIG={{ effective_kubeconfig }} kubectl get nodes
       when: not k8s_connection_success
       
     - name: Fail if namespace doesn't exist
@@ -104,11 +115,13 @@
       when: not namespace_exists
       
     - name: Check deployment status
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: Deployment
         name: moodle
         namespace: "{{ moodle_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: deployment_info
       delegate_to: localhost
       
@@ -118,12 +131,14 @@
         deployment_exists: "{{ (deployment_info.resources | length > 0) if (deployment_info.get('resources') is defined and deployment_info.resources is not none) else false }}"
         
     - name: Check pod status
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ moodle_namespace }}"
         label_selectors:
           - app.kubernetes.io/name=moodle
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: pod_info
       delegate_to: localhost
       
@@ -133,11 +148,13 @@
         ready_pods: "{{ ((pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) | length) if (pod_info.get('resources') is defined and pod_info.resources is not none and (pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list)) else 0 }}"
         
     - name: Check service status
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: Service
         name: moodle
         namespace: "{{ moodle_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: service_info
       delegate_to: localhost
       
@@ -147,11 +164,13 @@
         service_data: "{{ service_info.resources[0] if (service_info.get('resources') is defined and service_info.resources is not none and service_info.resources | length > 0) else {} }}"
         
     - name: Check database secret
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: Secret
         name: moodle-externaldb
         namespace: "{{ moodle_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: secret_info
       delegate_to: localhost
       
@@ -160,11 +179,13 @@
         secret_exists: "{{ (secret_info.resources | length > 0) if (secret_info.get('resources') is defined and secret_info.resources is not none) else false }}"
       
     - name: Check configmap
+      environment:
+        KUBECONFIG: "{{ effective_kubeconfig }}"
       kubernetes.core.k8s_info:
         kind: ConfigMap
         name: moodle-config-synchronized
         namespace: "{{ moodle_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
+        kubeconfig: "{{ effective_kubeconfig }}"
       register: configmap_info
       ignore_errors: true
       delegate_to: localhost
