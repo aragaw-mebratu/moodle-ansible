@@ -5,7 +5,7 @@
   gather_facts: false
   
   vars:
-    moodle_namespace: "moodle"
+    moodle_namespace: "{{ lookup('env', 'MOODLE_NAMESPACE') | default('moodle', true) }}"
     
   pre_tasks:
     - name: In-cluster authentication notice
@@ -13,7 +13,7 @@
         msg: |
           Using in-cluster authentication via ServiceAccount token.
           No kubeconfig file needed when running inside Kubernetes.
-          Ensure AWX ServiceAccount has RBAC permissions for Moodle namespace.
+          Ensure AWX ServiceAccount has RBAC permissions for {{ moodle_namespace }} namespace.
       delegate_to: localhost
       run_once: true
     
@@ -43,6 +43,7 @@
           Troubleshooting:
           1. Create the namespace: kubectl create namespace {{ moodle_namespace }}
           2. Deploy Moodle to the namespace
+          3. Or set MOODLE_NAMESPACE environment variable to the correct namespace
       when: not namespace_exists
       delegate_to: localhost
       run_once: true
