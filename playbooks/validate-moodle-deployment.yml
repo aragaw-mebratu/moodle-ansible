@@ -10,17 +10,23 @@
     kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default(source_kubeconfig, true) }}"
   
   pre_tasks:
-    - name: Verify source kubeconfig exists
+    - name: Check if source kubeconfig exists (for informational purposes)
       stat:
         path: "{{ source_kubeconfig }}"
       register: kubeconfig_stat
       delegate_to: localhost
       run_once: true
+      ignore_errors: true
     
-    - name: Fail if source kubeconfig does not exist
-      fail:
-        msg: "Source kubeconfig file {{ source_kubeconfig }} does not exist. Please ensure Kubernetes is properly configured."
-      when: not kubeconfig_stat.stat.exists
+    - name: Display kubeconfig status
+      debug:
+        msg: |
+          KUBECONFIG environment variable: {{ lookup('env', 'KUBECONFIG') | default('Not set', true) }}
+          Using kubeconfig path: {{ kubeconfig_path }}
+          Source kubeconfig exists: {{ kubeconfig_stat.stat.exists | default('Unknown') }}
+          
+          Note: The playbook will attempt to connect using the specified kubeconfig.
+          If connection fails, check that the kubeconfig file is accessible and valid.
   
   environment:
     KUBECONFIG: "{{ kubeconfig_path }}"
