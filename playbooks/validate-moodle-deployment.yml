@@ -15,10 +15,14 @@
       register: namespace_info
       ignore_errors: true
       
+    - name: Set namespace existence fact
+      set_fact:
+        namespace_exists: "{{ (namespace_info.resources | length > 0) if (namespace_info.get('resources') is defined) else (namespace_info.get('result', {}).get('items', []) | length > 0) }}"
+      
     - name: Fail if namespace doesn't exist
       fail:
         msg: "Moodle namespace '{{ moodle_namespace }}' does not exist"
-      when: namespace_info.resources | length == 0
+      when: not namespace_exists
       
     - name: Check deployment status
       kubernetes.core.k8s_info:
@@ -27,6 +31,11 @@
         namespace: "{{ moodle_namespace }}"
       register: deployment_info
       
+    - name: Set deployment status fact
+      set_fact:
+        deployment_available: "{{ (deployment_info.resources[0].status.availableReplicas is defined and deployment_info.resources[0].status.availableReplicas > 0) if (deployment_info.resources | length > 0) else false }}"
+        deployment_exists: "{{ deployment_info.resources | length > 0 if deployment_info.get('resources') is defined else false }}"
+        
     - name: Check pod status
       kubernetes.core.k8s_info:
         kind: Pod
@@ -35,6 +44,11 @@
           - app.kubernetes.io/name=moodle
       register: pod_info
       
+    - name: Set pod facts
+      set_fact:
+        total_pods: "{{ (pod_info.resources | length) if pod_info.get('resources') is defined else 0 }}"
+        ready_pods: "{{ ((pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) | length) if (pod_info.get('resources') is defined and (pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list)) else 0 }}"
+        
     - name: Check service status
       kubernetes.core.k8s_info:
         kind: Service
@@ -42,13 +56,10 @@
         namespace: "{{ moodle_namespace }}"
       register: service_info
       
-    - name: Count ready pods
+    - name: Set service facts
       set_fact:
-        total_pods: "{{ pod_info.resources | length }}"
-        
-    - name: Count ready containers
-      set_fact:
-        ready_pods: "{{ ((pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) | length) if (pod_info.resources | selectattr('status.phase', 'equalto', 'Running') | list) else 0 }}"
+        service_exists: "{{ service_info.resources | length > 0 if service_info.get('resources') is defined else false }}"
+        service_data: "{{ service_info.resources[0] if (service_info.get('resources') is defined and service_info.resources | length > 0) else {} }}"
         
     - name: Check database secret
       kubernetes.core.k8s_info:
@@ -57,41 +68,47 @@
         namespace: "{{ moodle_namespace }}"
       register: secret_info
       
+    - name: Set secret facts
+      set_fact:
+        secret_exists: "{{ secret_info.resources | length > 0 if secret_info.get('resources') is defined else false }}"
+      
     - name: Check configmap
       kubernetes.core.k8s_info:
         kind: ConfigMap
-        name: moodle-config-working
+        name: moodle-config-synchronized
         namespace: "{{ moodle_namespace }}"
       register: configmap_info
       ignore_errors: true
+      
+    - name: Set configmap facts
+      set_fact:
+        configmap_exists: "{{ configmap_info.resources | length > 0 if (configmap_info.get('resources') is defined and configmap_info.get('resources') is defined) else false }}"
       
     - name: Display validation results
       debug:
         msg:
           - "=== MOODLE DEPLOYMENT VALIDATION ==="
-          - "Namespace: {{ '✓ Present' if namespace_info.resources | length > 0 else '✗ Missing' }}"
-          - "Deployment: {{ '✓ Available' if deployment_info.resources[0].status.availableReplicas is defined and deployment_info.resources[0].status.availableReplicas > 0 else '✗ Not Available' }}"
+          - "Namespace: {{ '✓ Present' if namespace_exists else '✗ Missing' }}"
+          - "Deployment: {{ '✓ Available' if deployment_available else '✗ Not Available' }}"
           - "Pods: {{ ready_pods }}/{{ total_pods }} ready"
-          - "Service: {{ '✓ Present' if service_info.resources | length > 0 else '✗ Missing' }}"
-          - "Database Secret: {{ '✓ Present' if secret_info.resources | length > 0 else '✗ Missing' }}"
-          - "ConfigMap: {{ '✓ Present' if configmap_info.resources | length > 0 else '✗ Missing' }}"
+          - "Service: {{ '✓ Present' if service_exists else '✗ Missing' }}"
+          - "Database Secret: {{ '✓ Present' if secret_exists else '✗ Missing' }}"
+          - "ConfigMap: {{ '✓ Present' if configmap_exists else '✗ Missing' }}"
           - ""
           - "=== ACCESS INFORMATION ==="
-          - "NodePort: {{ service_info.resources[0].spec.ports[0].nodePort | default('Unknown') }}"
-          - "ClusterIP: {{ service_info.resources[0].spec.clusterIP | default('Unknown') }}"
+          - "NodePort: {{ service_data.spec.ports[0].nodePort | default('Unknown') if service_data.get('spec', {}).get('ports', []) | length > 0 else 'Unknown' }}"
+          - "ClusterIP: {{ service_data.spec.clusterIP | default('Unknown') if service_data.get('spec', {}).get('clusterIP') is defined else 'Unknown' }}"
           
     - name: Fail if deployment is not healthy
       fail:
         msg: "Moodle deployment is not healthy. Check the status above."
       when: >
-        deployment_info.resources[0].status.availableReplicas is not defined or 
-        deployment_info.resources[0].status.availableReplicas == 0 or
-        ready_pods == "0"
+        not deployment_available or
+        ready_pods == 0
         
     - name: Success message
       debug:
         msg: "✅ Moodle deployment validation successful!"
       when: >
-        deployment_info.resources[0].status.availableReplicas is defined and
-        deployment_info.resources[0].status.availableReplicas > 0 and
-        ready_pods != "0"
+        deployment_available and
+        ready_pods != 0
