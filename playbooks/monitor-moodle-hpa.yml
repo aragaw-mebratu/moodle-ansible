@@ -1,0 +1,65 @@
+---
+- name: Monitor Moodle HPA Status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    moodle_namespace: moodle
+
+  tasks:
+    - name: Get HPA status
+      kubernetes.core.k8s_info:
+        kind: HorizontalPodAutoscaler
+        name: moodle-hpa
+        namespace: "{{ moodle_namespace }}"
+      register: hpa_info
+
+    - name: Get deployment status
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+      register: deployment_info
+
+    - name: Get current pod metrics
+      command: |
+        kubectl top pods -n {{ moodle_namespace }} -l app.kubernetes.io/name=moodle
+      register: pod_metrics
+      ignore_errors: true
+
+    - name: Display HPA monitoring dashboard
+      debug:
+        msg: |
+          📊 MOODLE HPA MONITORING DASHBOARD
+          =================================
+          
+          HPA Configuration:
+          - Name: {{ hpa_info.resources[0].metadata.name }}
+          - Min Replicas: {{ hpa_info.resources[0].spec.minReplicas }}
+          - Max Replicas: {{ hpa_info.resources[0].spec.maxReplicas }}
+          
+          Current Status:
+          - Current Replicas: {{ hpa_info.resources[0].status.currentReplicas }}
+          - Desired Replicas: {{ hpa_info.resources[0].status.desiredReplicas }}
+          
+          Deployment Status:
+          - Available Replicas: {{ deployment_info.resources[0].status.availableReplicas }}
+          - Updated Replicas: {{ deployment_info.resources[0].status.updatedReplicas }}
+          - Total Replicas: {{ deployment_info.resources[0].status.replicas }}
+          
+          Resource Utilization:
+          {{ pod_metrics.stdout | default('Metrics not available') }}
+
+    - name: Check scaling recommendations
+      debug:
+        msg: |
+          🔍 SCALING RECOMMENDATIONS
+          =========================
+          
+          Current replicas: {{ hpa_info.resources[0].status.currentReplicas }}
+          Configured range: {{ hpa_info.resources[0].spec.minReplicas }} - {{ hpa_info.resources[0].spec.maxReplicas }}
+          
+          Monitor scaling activity with:
+          kubectl get hpa -n {{ moodle_namespace }} -w
+          kubectl describe hpa {{ hpa_info.resources[0].metadata.name }} -n {{ moodle_namespace }}

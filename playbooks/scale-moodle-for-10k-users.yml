@@ -1,0 +1,254 @@
+---
+- name: Scale Moodle for 10k Concurrent Users
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    moodle_namespace: moodle
+    moodle_release_name: moodle
+    target_replicas: 20
+    php_fpm_config:
+      pm_type: static
+      max_children: 200
+      start_servers: 50
+      min_spare_servers: 50
+      max_spare_servers: 100
+      max_requests: 500
+    moodle_resources:
+      requests:
+        cpu: "2000m"
+        memory: "6Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+
+  tasks:
+    - name: Display scaling plan
+      debug:
+        msg: |
+          Scaling Moodle deployment for 10k concurrent users:
+          - Increasing replicas from 3 to {{ target_replicas }}
+          - Updating PHP-FPM max_children from 50 to {{ php_fpm_config.max_children }}
+          - Adjusting resource allocation per pod
+          - Total capacity: {{ target_replicas }} pods × {{ php_fpm_config.max_children }} processes = {{ target_replicas * php_fpm_config.max_children }} concurrent requests
+
+    - name: Scale Moodle deployment
+      kubernetes.core.helm:
+        name: "{{ moodle_release_name }}"
+        chart_ref: bitnami/moodle
+        release_namespace: "{{ moodle_namespace }}"
+        update_repo_cache: true
+        values:
+          global:
+            security:
+              allowInsecureImages: true
+
+          image:
+            repository: aragawmebratu/moodle-with-tools
+            tag: latest
+            pullPolicy: Always
+
+          # Scale to handle 10k concurrent users
+          replicaCount: "{{ target_replicas }}"
+
+          # Disable embedded MariaDB
+          mariadb:
+            enabled: false
+
+          # Use direct database connection for better performance
+          externalDatabase:
+            host: "moodle-db-cluster.database.svc.cluster.local"
+            port: 5432
+            user: "moodleuser"
+            password: "PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw"
+            database: "moodledb"
+            type: pgsql
+
+          # Disable embedded Redis
+          redis:
+            enabled: false
+
+          # External Redis configuration
+          externalRedis:
+            host: "dragonfly-redis-master.dragonfly-system.svc.cluster.local"
+            port: 6379
+            password: "cbt@u0g123!!"
+
+          # Optimized resources for high concurrency
+          resources: "{{ moodle_resources }}"
+
+          # Moodle configuration
+          moodleUsername: admin
+          moodlePassword: admin123
+          moodleEmail: admin@example.com
+          moodleSkipInstall: true
+
+          # Persistence configuration
+          persistence:
+            enabled: true
+            size: 200Gi
+            storageClass: rook-cephfs
+            accessModes:
+              - ReadWriteMany
+
+          # Service configuration
+          service:
+            type: NodePort
+            nodePort: 32752
+
+          # PHP configuration for high load
+          phpConfiguration:
+            max_execution_time: 300
+            max_input_time: 180
+            memory_limit: 1G
+            upload_max_filesize: 512M
+            post_max_size: 512M
+            max_file_uploads: 100
+            opcache:
+              enable: true
+              memory_consumption: 512
+              max_accelerated_files: 20000
+              validate_timestamps: false
+              save_comments: true
+
+          # Configure PHP-FPM with high concurrency settings
+          extraVolumes:
+            - name: php-fpm-config
+              configMap:
+                name: moodle-php-fpm-config-highload
+            - name: config
+              configMap:
+                name: config
+
+          extraVolumeMounts:
+            - name: config
+              mountPath: /bitnami/moodle/config.php
+              subPath: config.php
+              readOnly: true
+            - name: php-fpm-config
+              mountPath: /opt/bitnami/php/etc/php-fpm.d/www.conf
+              subPath: www.conf
+              readOnly: true
+
+          # Health checks optimized for high load
+          livenessProbe:
+            enabled: true
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            enabled: true
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Pod disruption budget for HA
+          podDisruptionBudget:
+            enabled: true
+            minAvailable: 5
+
+
+
+    - name: Wait for deployment to be ready
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: "{{ moodle_namespace }}"
+      register: deployment_status
+      until: >
+        deployment_status.resources is defined and
+        deployment_status.resources | length > 0 and
+        deployment_status.resources[0].status.availableReplicas is defined and
+        deployment_status.resources[0].status.availableReplicas >= target_replicas
+      retries: 30
+      delay: 30
+
+    - name: Verify scaled deployment
+      debug:
+        msg: |
+          Moodle deployment successfully scaled:
+          - Running {{ target_replicas }} pods
+          - Each pod configured with {{ php_fpm_config.max_children }} PHP-FPM processes
+          - Total capacity: {{ target_replicas * php_fpm_config.max_children }} concurrent requests
+          - Resource allocation: {{ moodle_resources.requests.cpu }} CPU, {{ moodle_resources.requests.memory }} memory per pod
+
+    - name: Update K6 test configuration
+      copy:
+        content: |
+          import http from 'k6/http';
+          import { check, sleep } from 'k6';
+          import { SharedArray } from 'k6/data';
+
+          export const options = {
+            vus: 500,
+            duration: '5m',
+            thresholds: {
+              http_req_failed: ['rate<0.05'],
+              http_req_duration: ['p(95)<3000'],
+            },
+          };
+
+          const users = new SharedArray('users', function () {
+            return open('/home/administrator/k6/moodle/datasets/moodle_users_1000.csv')
+              .split('\n')
+              .slice(1)
+              .filter(l => l.trim() !== '')
+              .map(line => {
+                const [username, password] = line.split(',');
+                return { username, password };
+              });
+          });
+
+          export default function () {
+            const user = users[__VU % users.length];
+
+            // 1. Load login page
+            const loginPage = http.get('http://10.139.8.131:32752/login/index.php');
+
+            const logintoken = loginPage
+              .html()
+              .find('input[name=logintoken]')
+              .val();
+
+            check(logintoken, {
+              'logintoken found': t => t !== undefined,
+            });
+
+            // 2. Submit login form
+            const res = http.post(
+              'http://10.139.8.131:32752/login/index.php',
+              {
+                username: user.username,
+                password: user.password,
+                logintoken: logintoken,
+              },
+              { redirects: 0 }
+            );
+
+            check(res, {
+              'login success': r => r.status === 302 || r.status === 303,
+            });
+
+            sleep(1);
+          }
+        dest: /opt/k6/moodle/login-highload.js
+        mode: '0644'
+
+    - name: Success message
+      debug:
+        msg: |
+          ✅ Moodle successfully scaled for 10k concurrent users!
+          
+          Next steps:
+          1. Run the updated K6 test: k6 run /opt/k6/moodle/login-highload.js
+          2. Monitor pod resource usage: kubectl top pods -n moodle
+          3. Check application logs: kubectl logs -n moodle -l app.kubernetes.io/name=moodle
+          
+          Expected capacity:
+          - 20 pods × 200 PHP processes = 4000 concurrent requests
+          - With proper load balancing, this can handle 10k concurrent users
+          - Monitor and adjust based on actual performance metrics

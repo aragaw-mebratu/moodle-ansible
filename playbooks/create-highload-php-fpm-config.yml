@@ -1,0 +1,63 @@
+---
+- name: Create High-Load PHP-FPM ConfigMap
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    moodle_namespace: moodle
+
+  tasks:
+    - name: Create high-load PHP-FPM ConfigMap
+      kubernetes.core.k8s:
+        kind: ConfigMap
+        name: moodle-php-fpm-config-highload
+        namespace: "{{ moodle_namespace }}"
+        definition:
+          data:
+            www.conf: |
+              [www]
+              user = daemon
+              group = daemon
+
+              listen = 127.0.0.1:9000
+              listen.backlog = 65535
+
+              # High-performance configuration for 10k+ concurrent users
+              pm = static
+              pm.max_children = 200          # Increased for high concurrency
+              pm.start_servers = 50
+              pm.min_spare_servers = 50
+              pm.max_spare_servers = 100
+              pm.max_requests = 500          # Reduced to prevent memory leaks with high load
+
+              # Process management
+              pm.process_idle_timeout = 60s
+              request_terminate_timeout = 300
+              request_slowlog_timeout = 60s
+              slowlog = /proc/self/fd/2
+
+              # Output and environment
+              catch_workers_output = yes
+              clear_env = no
+              env[PATH] = /usr/local/bin:/usr/bin:/bin
+              env[TMP] = /tmp
+              env[TMPDIR] = /tmp
+              env[TEMP] = /tmp
+
+              # Health checks
+              ping.path = /ping
+              pm.status_path = /status
+
+              # Security
+              security.limit_extensions = .php .php3 .php4 .php5 .php7 .php8
+
+              # Performance
+              rlimit_files = 65535
+              rlimit_core = 0
+
+              # PHP settings via env
+              env[PHP_MEMORY_LIMIT] = 1G
+              env[PHP_MAX_EXECUTION_TIME] = 300
+              env[PHP_UPLOAD_MAX_FILESIZE] = 512M
+              env[PHP_POST_MAX_SIZE] = 512M

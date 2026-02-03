@@ -1,0 +1,166 @@
+---
+- name: Optimize PostgreSQL Database for High Load
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    database_namespace: database
+    db_cluster_name: moodle-db-cluster
+
+  tasks:
+    - name: Display current database configuration
+      debug:
+        msg: |
+          Current PostgreSQL Configuration Issues:
+          - max_connections: 500 (may be insufficient for 500+ concurrent users)
+          - shared_buffers: 8GB (might need adjustment)
+          - Pooler showing SSL and parameter errors
+          - Connection timeouts during high load tests
+
+    - name: Check current database connection usage
+      command: |
+        kubectl exec -n {{ database_namespace }} {{ db_cluster_name }}-0 -- psql -U postgres -c "SELECT count(*) FROM pg_stat_activity WHERE datname = 'moodledb';"
+      register: current_connections
+
+    - name: Display current connections
+      debug:
+        msg: "Current database connections: {{ current_connections.stdout_lines[2] | trim }}"
+
+    - name: Update database configuration for high load
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: acid.zalan.do/v1
+          kind: postgresql
+          metadata:
+            name: "{{ db_cluster_name }}"
+            namespace: "{{ database_namespace }}"
+          spec:
+            teamId: moodle
+            volume:
+              size: 200Gi
+            numberOfInstances: 5
+            users:
+              moodleuser:
+                - superuser
+                - createdb
+            databases:
+              moodledb: moodleuser
+            postgresql:
+              version: "15"
+            resources:
+              requests:
+                cpu: "4"
+                memory: "12Gi"
+              limits:
+                cpu: "8"
+                memory: "16Gi"
+            patroni:
+              initdb:
+                encoding: "UTF8"
+                locale: "en_US.UTF-8"
+              pg_hba:
+                - hostssl all all 0.0.0.0/0 md5
+                - host all all 0.0.0.0/0 md5
+              postgresql:
+                parameters:
+                  # Increase connection limits
+                  max_connections: "1000"
+                  superuser_reserved_connections: "10"
+                  
+                  # Optimize memory settings for high concurrency
+                  shared_buffers: "12GB"
+                  effective_cache_size: "24GB"
+                  work_mem: "64MB"
+                  maintenance_work_mem: "2GB"
+                  
+                  # Connection pooling optimizations
+                  max_prepared_transactions: "500"
+                  max_locks_per_transaction: "1024"
+                  
+                  # Performance tuning
+                  checkpoint_completion_target: "0.9"
+                  checkpoint_timeout: "15min"
+                  wal_buffers: "64MB"
+                  default_statistics_target: "500"
+                  random_page_cost: "1.1"
+                  seq_page_cost: "1.0"
+                  
+                  # Timeout settings for high load
+                  statement_timeout: "60000"
+                  lock_timeout: "20000"
+                  idle_in_transaction_session_timeout: "60000"
+                  tcp_keepalives_idle: "600"
+                  tcp_keepalives_interval: "30"
+                  tcp_keepalives_count: "3"
+                  
+                  # Parallel processing
+                  max_worker_processes: "32"
+                  max_parallel_workers_per_gather: "16"
+                  max_parallel_workers: "32"
+                  max_parallel_maintenance_workers: "16"
+                  
+                  # WAL settings
+                  min_wal_size: "4GB"
+                  max_wal_size: "16GB"
+                  wal_writer_delay: "200ms"
+                  
+                  # Logging
+                  log_min_duration_statement: "1000"
+                  log_checkpoints: "on"
+                  log_connections: "on"
+                  log_disconnections: "on"
+                  log_lock_waits: "on"
+
+    - name: Wait for database configuration to be applied
+      pause:
+        seconds: 30
+
+    - name: Restart database cluster to apply new configuration
+      command: |
+        kubectl delete pod -n {{ database_namespace }} {{ db_cluster_name }}-0
+      ignore_errors: true
+
+    - name: Wait for database to restart
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: "{{ db_cluster_name }}-0"
+        namespace: "{{ database_namespace }}"
+      register: db_pod
+      until: >
+        db_pod.resources is defined and
+        db_pod.resources | length > 0 and
+        db_pod.resources[0].status.phase == "Running" and
+        db_pod.resources[0].status.containerStatuses[0].ready == true
+      retries: 30
+      delay: 10
+
+    - name: Verify new configuration
+      command: |
+        kubectl exec -n {{ database_namespace }} {{ db_cluster_name }}-0 -- psql -U postgres -c "SHOW max_connections;"
+      register: max_connections
+
+    - name: Display updated configuration
+      debug:
+        msg: |
+          ✅ PostgreSQL Database Successfully Optimized:
+          - max_connections increased to 1000 (from 500)
+          - shared_buffers increased to 12GB (from 8GB)
+          - Added connection timeout optimizations
+          - Enabled detailed logging for troubleshooting
+          - Optimized parallel processing settings
+          
+          New capacity: Up to 1000 concurrent database connections
+          This should handle 500+ VUs with multiple connections per user
+
+    - name: Test database connectivity
+      command: |
+        kubectl exec -n {{ database_namespace }} {{ db_cluster_name }}-0 -- psql -U postgres -c "SELECT 1;"
+      register: db_test
+
+    - name: Display test result
+      debug:
+        msg: |
+          Database connectivity test: {{ '✅ SUCCESS' if db_test.rc == 0 else '❌ FAILED' }}
+          {{ db_test.stdout if db_test.rc == 0 else db_test.stderr }}

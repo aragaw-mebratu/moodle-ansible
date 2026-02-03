@@ -1,0 +1,58 @@
+---
+- name: Scale Moodle Infrastructure for 10k Concurrent Users
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Validate current deployment status
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: moodle
+      register: current_deployment
+
+    - name: Display current configuration
+      debug:
+        msg: |
+          Current Moodle deployment:
+          - Replicas: {{ current_deployment.resources[0].spec.replicas | default(3) }}
+          - Available: {{ current_deployment.resources[0].status.availableReplicas | default(0) }}
+          - PHP-FPM max_children: 50 (per pod)
+          - Current capacity: ~150 concurrent requests
+
+  tasks:
+    - name: Create high-load PHP-FPM configuration
+      import_tasks: create-highload-php-fpm-config.yml
+
+    - name: Scale Moodle deployment to handle 10k users
+      import_tasks: scale-moodle-for-10k-users.yml
+
+  post_tasks:
+    - name: Validate scaled deployment
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: moodle
+        namespace: moodle
+      register: scaled_deployment
+
+    - name: Display final configuration
+      debug:
+        msg: |
+          ✅ Moodle successfully scaled for 10k concurrent users:
+          - Replicas: {{ scaled_deployment.resources[0].spec.replicas }}
+          - Available: {{ scaled_deployment.resources[0].status.availableReplicas }}
+          - PHP-FPM max_children: 200 (per pod)
+          - Total capacity: {{ scaled_deployment.resources[0].spec.replicas * 200 }} concurrent requests
+          - Resource allocation: 2 CPU, 6GB RAM per pod
+
+    - name: Run validation test
+      command: k6 run --vus 100 --duration 30s /opt/k6/moodle/login-highload.js
+      register: validation_test
+      ignore_errors: true
+
+    - name: Display validation results
+      debug:
+        msg: |
+          Validation test results:
+          {{ validation_test.stdout }}

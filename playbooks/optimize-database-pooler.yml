@@ -1,0 +1,177 @@
+---
+- name: Optimize Database Connection Pooler for High Load
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    database_namespace: database
+    pooler_deployment: moodle-db-cluster-pooler
+    # Optimized pooler settings for 10k concurrent users
+    pooler_default_size: 100
+    pooler_min_size: 20
+    pooler_reserve_size: 20
+    pooler_max_client_conn: 50000
+    pooler_max_db_conn: 300
+    pooler_replicas: 6
+
+  tasks:
+    - name: Display current pooler configuration
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: "{{ pooler_deployment }}"
+        namespace: "{{ database_namespace }}"
+      register: current_pooler
+
+    - name: Show current configuration
+      debug:
+        msg: |
+          Current Database Pooler Configuration:
+          - Replicas: {{ current_pooler.resources[0].spec.replicas }}
+          - Default Size: {{ current_pooler.resources[0].spec.template.spec.containers[0].env | selectattr('name', 'equalto', 'CONNECTION_POOLER_DEFAULT_SIZE') | map(attribute='value') | first }}
+          - Max DB Connections: {{ current_pooler.resources[0].spec.template.spec.containers[0].env | selectattr('name', 'equalto', 'CONNECTION_POOLER_MAX_DB_CONN') | map(attribute='value') | first }}
+          - Max Client Connections: {{ current_pooler.resources[0].spec.template.spec.containers[0].env | selectattr('name', 'equalto', 'CONNECTION_POOLER_MAX_CLIENT_CONN') | map(attribute='value') | first }}
+
+    - name: Update pooler configuration for high load
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ pooler_deployment }}"
+            namespace: "{{ database_namespace }}"
+          spec:
+            replicas: "{{ pooler_replicas | int }}"
+
+            selector:
+              matchLabels:
+                application: db-connection-pooler
+                cluster-name: moodle-db-cluster
+                connection-pooler: moodle-db-cluster-pooler
+            template:
+              metadata:
+                labels:
+                  application: db-connection-pooler
+                  cluster-name: moodle-db-cluster
+                  connection-pooler: moodle-db-cluster-pooler
+                  spilo-role: master
+                  team: moodle
+              spec:
+                containers:
+                - name: connection-pooler
+                  image: registry.opensource.zalan.do/acid/pgbouncer:master-32
+                  imagePullPolicy: IfNotPresent
+                  ports:
+                  - containerPort: 5432
+                    protocol: TCP
+                  env:
+                  - name: PGHOST
+                    value: moodle-db-cluster
+                  - name: PGPORT
+                    value: "5432"
+                  - name: PGUSER
+                    valueFrom:
+                      secretKeyRef:
+                        key: username
+                        name: pooler.moodle-db-cluster.credentials.postgresql.acid.zalan.do
+                  - name: PGSCHEMA
+                    value: pooler
+                  - name: PGPASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        key: password
+                        name: pooler.moodle-db-cluster.credentials.postgresql.acid.zalan.do
+                  - name: CONNECTION_POOLER_PORT
+                    value: "5432"
+                  - name: CONNECTION_POOLER_MODE
+                    value: transaction
+                  - name: CONNECTION_POOLER_DEFAULT_SIZE
+                    value: "{{ pooler_default_size | string }}"
+                  - name: CONNECTION_POOLER_MIN_SIZE
+                    value: "{{ pooler_min_size | string }}"
+                  - name: CONNECTION_POOLER_RESERVE_SIZE
+                    value: "{{ pooler_reserve_size | string }}"
+                  - name: CONNECTION_POOLER_MAX_CLIENT_CONN
+                    value: "{{ pooler_max_client_conn | string }}"
+                  - name: CONNECTION_POOLER_MAX_DB_CONN
+                    value: "{{ pooler_max_db_conn | string }}"
+                  resources:
+                    limits:
+                      cpu: "2"
+                      memory: 2Gi
+                    requests:
+                      cpu: "1"
+                      memory: 1Gi
+                  readinessProbe:
+                    failureThreshold: 3
+                    periodSeconds: 10
+                    successThreshold: 1
+                    tcpSocket:
+                      port: 5432
+                    timeoutSeconds: 1
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                dnsPolicy: ClusterFirst
+                restartPolicy: Always
+                schedulerName: default-scheduler
+                securityContext:
+                  runAsGroup: 101
+                  runAsUser: 100
+                serviceAccount: postgres-pod
+                serviceAccountName: postgres-pod
+                terminationGracePeriodSeconds: 300
+
+    - name: Wait for pooler deployment to be ready
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: "{{ pooler_deployment }}"
+        namespace: "{{ database_namespace }}"
+      register: pooler_status
+      until: >
+        pooler_status.resources is defined and
+        pooler_status.resources | length > 0 and
+        pooler_status.resources[0].status.availableReplicas is defined and
+        pooler_status.resources[0].status.availableReplicas >= pooler_replicas
+      retries: 30
+      delay: 10
+
+    - name: Verify optimized configuration
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: "{{ pooler_deployment }}"
+        namespace: "{{ database_namespace }}"
+      register: optimized_pooler
+
+    - name: Display optimized configuration
+      debug:
+        msg: |
+          ✅ Database Pooler Successfully Optimized:
+          - Replicas: {{ optimized_pooler.resources[0].spec.replicas }} (increased from 3)
+          - Default Pool Size: {{ pooler_default_size }} (increased from 10)
+          - Min Pool Size: {{ pooler_min_size }}
+          - Reserve Size: {{ pooler_reserve_size }}
+          - Max Client Connections: {{ pooler_max_client_conn }} (increased from 10000)
+          - Max Database Connections: {{ pooler_max_db_conn }} (increased from 20)
+          
+          Total capacity: {{ pooler_replicas }} replicas × {{ pooler_default_size }} connections = {{ pooler_replicas * pooler_default_size }} concurrent database connections
+          
+          This configuration can now handle:
+          - Up to 50000 client connections
+          - 300 total database connections
+          - 600 concurrent connection pool sessions
+
+    - name: Test database connectivity
+      command: |
+        kubectl exec -n {{ database_namespace }} {{ (kubectl get pods -n {{ database_namespace }} -l application=db-connection-pooler -o jsonpath='{.items[0].metadata.name}' | split(' '))[0] }} -- psql -h localhost -p 5432 -U $PGUSER -d postgres -c "SELECT 1;"
+      environment:
+        PGUSER: "{{ lookup('kubernetes.core.k8s', kind='Secret', namespace=database_namespace, name='pooler.moodle-db-cluster.credentials.postgresql.acid.zalan.do').data.username | b64decode }}"
+        PGPASSWORD: "{{ lookup('kubernetes.core.k8s', kind='Secret', namespace=database_namespace, name='pooler.moodle-db-cluster.credentials.postgresql.acid.zalan.do').data.password | b64decode }}"
+      register: db_test
+      ignore_errors: true
+
+    - name: Display database connectivity test
+      debug:
+        msg: |
+          Database connectivity test: {{ '✅ SUCCESS' if db_test.rc == 0 else '❌ FAILED' }}
+          {{ db_test.stdout if db_test.rc == 0 else db_test.stderr }}

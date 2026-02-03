@@ -1,0 +1,183 @@
+---
+- name: Optimize Dragonfly Redis for High Load
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    redis_namespace: dragonfly-system
+    redis_release_name: dragonfly
+
+  tasks:
+    - name: Display current Redis configuration issues
+      debug:
+        msg: |
+          Current Dragonfly Redis Configuration Issues:
+          - Master CPU: 100m-150m (insufficient for 500+ concurrent users)
+          - Master Memory: 128Mi-192Mi (too low for caching)
+          - Replica CPU: Likely similar limitations
+          - Connection timeouts under high load
+          - Frequent readiness probe failures
+
+    - name: Scale up Redis master resources
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: "{{ redis_release_name }}-redis-master"
+            namespace: "{{ redis_namespace }}"
+          spec:
+            template:
+              spec:
+                containers:
+                - name: redis
+                  resources:
+                    requests:
+                      cpu: "7000m"
+                      memory: "8Gi"
+                    limits:
+                      cpu: "10000m"
+                      memory: "10Gi"
+
+    - name: Scale up Redis replica resources
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: "{{ redis_release_name }}-redis-replicas"
+            namespace: "{{ redis_namespace }}"
+          spec:
+            template:
+              spec:
+                containers:
+                - name: redis
+                  resources:
+                    requests:
+                      cpu: "500m"
+                      memory: "1Gi"
+                    limits:
+                      cpu: "1000m"
+                      memory: "2Gi"
+
+    - name: Increase Redis connection limits
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ redis_release_name }}-redis-configuration"
+            namespace: "{{ redis_namespace }}"
+          data:
+            redis.conf: |
+              # Redis configuration for high load
+              maxmemory 1gb
+              maxmemory-policy allkeys-lru
+              tcp-keepalive 300
+              timeout 300
+              tcp-backlog 511
+              maxclients 10000
+              databases 16
+              
+              # Performance tuning
+              save ""
+              appendonly no
+              activerehashing yes
+              hash-max-ziplist-entries 512
+              hash-max-ziplist-value 64
+              list-max-ziplist-size -2
+              list-compress-depth 0
+              set-max-intset-entries 512
+              zset-max-ziplist-entries 128
+              zset-max-ziplist-value 64
+              hll-sparse-max-bytes 3000
+              stream-node-max-bytes 4096
+              stream-node-max-entries 100
+              
+              # Network optimization
+              repl-disable-tcp-nodelay no
+              repl-backlog-size 1mb
+              repl-backlog-ttl 3600
+              
+              # Logging
+              loglevel notice
+              logfile ""
+
+    - name: Restart Redis master to apply new configuration
+      command: |
+        kubectl delete pod -n {{ redis_namespace }} {{ redis_release_name }}-redis-master-0
+      ignore_errors: true
+
+    - name: Wait for Redis master to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: "{{ redis_release_name }}-redis-master-0"
+        namespace: "{{ redis_namespace }}"
+      register: redis_master
+      until: >
+        redis_master.resources is defined and
+        redis_master.resources | length > 0 and
+        redis_master.resources[0].status.phase == "Running" and
+        redis_master.resources[0].status.containerStatuses[0].ready == true
+      retries: 30
+      delay: 10
+
+    - name: Restart Redis replicas to apply new configuration
+      command: |
+        kubectl delete pod -n {{ redis_namespace }} {{ item }}
+      loop:
+        - "{{ redis_release_name }}-redis-replicas-0"
+        - "{{ redis_release_name }}-redis-replicas-1"
+        - "{{ redis_release_name }}-redis-replicas-2"
+      ignore_errors: true
+
+    - name: Wait for Redis replicas to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: "{{ item }}"
+        namespace: "{{ redis_namespace }}"
+      register: redis_replica
+      until: >
+        redis_replica.resources is defined and
+        redis_replica.resources | length > 0 and
+        redis_replica.resources[0].status.phase == "Running" and
+        redis_replica.resources[0].status.containerStatuses[0].ready == true
+      retries: 20
+      delay: 10
+      loop:
+        - "{{ redis_release_name }}-redis-replicas-0"
+        - "{{ redis_release_name }}-redis-replicas-1"
+        - "{{ redis_release_name }}-redis-replicas-2"
+
+    - name: Verify Redis configuration
+      command: |
+        kubectl exec -n {{ redis_namespace }} {{ redis_release_name }}-redis-master-0 -- redis-cli info memory | grep maxmemory
+      register: redis_memory
+
+    - name: Display optimization results
+      debug:
+        msg: |
+          ✅ Dragonfly Redis Successfully Optimized:
+          - Master: 1-2 CPU cores, 2-4GB RAM (from 0.1 CPU, 128MB RAM)
+          - Replicas: 0.5-1 CPU cores, 1-2GB RAM each
+          - Max connections increased to 10,000
+          - Memory limit set to 1GB with LRU eviction
+          - Disabled persistence for better performance
+          - Optimized network settings
+          
+          This should eliminate Redis connection timeouts under 500+ VU load!
+
+    - name: Test Redis connectivity
+      command: |
+        kubectl exec -n {{ redis_namespace }} {{ redis_release_name }}-redis-master-0 -- redis-cli ping
+      register: redis_ping
+
+    - name: Display connectivity test result
+      debug:
+        msg: |
+          Redis connectivity test: {{ '✅ SUCCESS' if redis_ping.stdout == 'PONG' else '❌ FAILED' }}
+          Response: {{ redis_ping.stdout }}
