@@ -1,0 +1,89 @@
+<?php
+unset($CFG);
+global $CFG;
+$CFG = new stdClass();
+
+// Database configuration
+$CFG->dbtype    = 'pgsql';
+$CFG->dblibrary = 'native';
+$CFG->dbhost    = '{{ external_db.host }}';
+$CFG->dbname    = '{{ external_db.database }}';
+$CFG->dbuser    = '{{ external_db.user }}';
+$CFG->dbpass    = '{{ external_db_password }}';
+$CFG->prefix    = 'mdl_';
+
+// Database options
+$CFG->dboptions = array (
+  'dbpersist' => 0,
+  'dbport' => {{ external_db.port }},
+  'dbsocket' => '',
+  'connecttimeout' => 3,
+  'connectretries' => 2,
+  'fetchbuffersize' => 100000,
+  'readonly' => array(
+    'instance1' => array(
+      'dbhost' => 'moodle-db-cluster-0.database.svc.cluster.local',
+      'dbport' => {{ external_db.port }},
+      'dbuser' => '{{ external_db.user }}',
+      'dbpass' => '{{ external_db_password }}'
+    ),
+    'instance2' => array(
+      'dbhost' => 'moodle-db-cluster-3.database.svc.cluster.local',
+      'dbport' => {{ external_db.port }},
+      'dbuser' => '{{ external_db.user }}',
+      'dbpass' => '{{ external_db_password }}'
+    ),
+    'instance3' => array(
+      'dbhost' => 'moodle-db-cluster-4.database.svc.cluster.local',
+      'dbport' => {{ external_db.port }},
+      'dbuser' => '{{ external_db.user }}',
+      'dbpass' => '{{ external_db_password }}'
+    )
+  )
+);
+
+// URL detection
+if (empty($_SERVER['HTTP_HOST'])) {
+  $_SERVER['HTTP_HOST'] = '127.0.0.1:8080';
+}
+if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') {
+  $CFG->wwwroot = 'https://' . $_SERVER['HTTP_HOST'];
+} else {
+  $CFG->wwwroot = 'http://' . $_SERVER['HTTP_HOST'];
+}
+
+// Core paths
+$CFG->dataroot  = '/bitnami/moodledata';
+$CFG->admin     = 'admin';
+$CFG->directorypermissions = 02775;
+
+// Redis session handling
+$CFG->session_handler_class = '\\core\\session\\redis';
+$CFG->session_redis_host = '{{ dragonfly.host }}';
+$CFG->session_redis_port = {{ dragonfly.port }};
+$CFG->session_redis_auth = '{{ dragonfly_password }}';
+$CFG->session_redis_database = 0;
+$CFG->session_redis_prefix = 'moodle_sess_';
+$CFG->session_redis_acquire_lock_timeout = 120;
+
+// Redis cache
+$CFG->redis_host = '{{ dragonfly.host }}';
+$CFG->redis_port = {{ dragonfly.port }};
+$CFG->redis_password = '{{ dragonfly_password }}';
+$CFG->redis_prefix = 'moodle_cache_';
+
+// Performance optimizations
+$CFG->debug = 0;
+$CFG->debugdisplay = false;
+$CFG->perfdebug = 0;
+$CFG->showcrondebugging = false;
+$CFG->cachejs = true;
+$CFG->cachetemplates = true;
+$CFG->themedesignermode = false;
+$CFG->filelifetime = 86400;
+$CFG->session_update_timemodified_frequency = 60;
+$CFG->cronclionly = true;
+$CFG->extramemorylimit = '512M';
+$CFG->maxtimelimit = 180;
+
+require_once(__DIR__ . '/lib/setup.php');

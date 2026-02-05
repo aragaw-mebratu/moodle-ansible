@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: moodle-php-fpm-config
+  name: "{{ moodle.php_fpm_config_map | default('moodle-php-fpm-config') }}"
   namespace: moodle
 data:
   www.conf: |

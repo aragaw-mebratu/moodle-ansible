@@ -6,7 +6,7 @@ $CFG = new stdClass();
 // Database configuration - DIRECT CONNECTION (no pooler)
 $CFG->dbtype    = 'pgsql';
 $CFG->dblibrary = 'native';
-$CFG->dbhost    = '{{ db_host | default("moodle-db-cluster.database.svc.cluster.local") }}';
+$CFG->dbhost    = '{{ db_host | default("moodle-db-cluster-pooler.database.svc.cluster.local") }}';
 $CFG->dbname    = '{{ db_name | default("moodledb") }}';
 $CFG->dbuser    = '{{ db_user | default("moodleuser") }}';
 $CFG->dbpass    = '{{ db_password | default("PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw") }}';
@@ -14,7 +14,8 @@ $CFG->prefix    = 'mdl_';
 
 // Optimized database options for direct connection
 $CFG->dboptions = array (
-  'dbpersist' => 1,
+  // Use non-persistent connections with the pooler.
+  'dbpersist' => 0,
   'dbport' => {{ db_port | default(5432) }},
   'dbsocket' => '',
   'connecttimeout' => 3,
@@ -28,7 +29,54 @@ if (empty($_SERVER['HTTP_HOST'])) {
 }
 if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on') {
   $CFG->wwwroot = 'https://' . $_SERVER['HTTP_HOST'];
-} else {
+} else {<?php
+unset($CFG);
+global $CFG;
+$CFG = new stdClass();
+
+/* ==========================================================================
+ * CORE PATHS
+ * ========================================================================== */
+$CFG->dataroot  = '/bitnami/moodledata';
+$CFG->admin     = 'admin';
+$CFG->directorypermissions = 02775;
+
+/* ==========================================================================
+ * WWWROOT AUTO-DETECTION (K8s SAFE)
+ * ========================================================================== */
+if (empty($_SERVER['HTTP_HOST'])) {
+    $_SERVER['HTTP_HOST'] = '127.0.0.1:8080';
+}
+
+$CFG->wwwroot = (
+    (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on')
+    ? 'https://' . $_SERVER['HTTP_HOST']
+    : 'http://' . $_SERVER['HTTP_HOST']
+);
+
+/* ==========================================================================
+ * PERFORMANCE & STABILITY
+ * ========================================================================== */
+$CFG->debug = 0;
+$CFG->debugdisplay = false;
+$CFG->perfdebug = 0;
+$CFG->showcrondebugging = false;
+
+$CFG->cachejs = true;
+$CFG->cachetemplates = true;
+$CFG->themedesignermode = false;
+
+$CFG->filelifetime = 86400;
+$CFG->session_update_timemodified_frequency = 60;
+
+$CFG->extramemorylimit = '512M';
+$CFG->maxtimelimit = 180;
+
+/* ==========================================================================
+ * REQUIRED
+ * ========================================================================== */
+require_once(__DIR__ . '/lib/setup.php');
+
   $CFG->wwwroot = 'http://' . $_SERVER['HTTP_HOST'];
 }
 

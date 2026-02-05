@@ -48,7 +48,7 @@
 
     - name: Restart Moodle deployment to pick up new config
       kubernetes.core.k8s:
-        kubeconfig: /home/ansible/.kube/config
+        kubeconfig: "{{ (kubeconfig is defined and kubeconfig | length > 0) | ternary(kubeconfig, omit) }}"
         kind: Deployment
         namespace: moodle
         name: moodle
@@ -59,4 +59,3 @@
               metadata:
                 annotations:
                   redeploy-timestamp: "{{ lookup('pipe', 'date +%s') }}"
-

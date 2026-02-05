@@ -21,7 +21,7 @@
     name: "{{ moodle.release_name }}"
     chart_ref: bitnami/moodle
     release_namespace: "{{ moodle.namespace }}"
-    kubeconfig: "{{ kubeconfig }}"
+    kubeconfig: "{{ (kubeconfig is defined and kubeconfig | length > 0) | ternary(kubeconfig, omit) }}"
     update_repo_cache: true
     values:
       global:
@@ -78,7 +78,7 @@
       extraVolumes:
         - name: php-fpm-config
           configMap:
-            name: moodle-php-fpm-config
+            name: "{{ moodle.php_fpm_config_map | default('moodle-php-fpm-config') }}"
         - name: config
           configMap:
             name: config

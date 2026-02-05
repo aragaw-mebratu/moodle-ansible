@@ -12,7 +12,7 @@
         name: "{{ moodle.release_name }}"
         chart_ref: bitnami/moodle
         release_namespace: "{{ moodle.namespace }}"
-        kubeconfig: "{{ kubeconfig }}"
+        kubeconfig: "{{ (kubeconfig is defined and kubeconfig | length > 0) | ternary(kubeconfig, omit) }}"
         values:
           global:
             security:
@@ -68,7 +68,7 @@
                 name: config
             - name: php-fpm-config
               configMap:
-                name: moodle-php-fpm-config
+                name: "{{ moodle.php_fpm_config_map | default('moodle-php-fpm-config') }}"
 
           extraVolumeMounts:
             - name: config

@@ -82,10 +82,10 @@
                 lock_timeout: "10000"
             resources:
               requests:
-                cpu: "4000m"
+                cpu: "6000m"
                 memory: "12Gi"
               limits:
-                cpu: "8000m"
+                cpu: "10000m"
                 memory: "16Gi"
             databases:
               moodledb: moodleuser

@@ -51,7 +51,7 @@
               version: "15"
             resources:
               requests:
-                cpu: "4"
+                cpu: "6"
                 memory: "12Gi"
               limits:
                 cpu: "8"
@@ -61,8 +61,8 @@
                 encoding: "UTF8"
                 locale: "en_US.UTF-8"
               pg_hba:
-                - hostssl all all 0.0.0.0/0 md5
                 - host all all 0.0.0.0/0 md5
+                - hostssl all all 0.0.0.0/0 md5
               postgresql:
                 parameters:
                   # Increase connection limits

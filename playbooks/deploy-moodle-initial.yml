@@ -1,0 +1,134 @@
+# playbooks/deploy-moodle-initial.yml
+---
+- name: Deploy Single Moodle Pod for Database Initialization
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    moodle_namespace: moodle
+    moodle_release_name: moodle
+    kubeconfig: "{{ kubeconfig | default('') }}"
+
+  tasks:
+    - name: Add Bitnami Helm repo
+      kubernetes.core.helm_repository:
+        name: bitnami
+        repo_url: https://charts.bitnami.com/bitnami
+
+    - name: Deploy single Moodle pod for database initialization
+      kubernetes.core.helm:
+        name: "{{ moodle_release_name }}"
+        chart_ref: bitnami/moodle
+        release_namespace: "{{ moodle_namespace }}"
+        create_namespace: true
+        kubeconfig: "{{ (kubeconfig is defined and kubeconfig | length > 0) | ternary(kubeconfig, omit) }}"
+        timeout: 30m
+        wait: true  # Wait for deployment to be ready
+        values:
+          global:
+            security:
+              allowInsecureImages: true
+
+          image:
+            repository: aragawmebratu/moodle-with-tools
+            tag: latest
+
+          replicaCount: 1  # Deploy only single pod initially
+
+          mariadb:
+            enabled: false
+
+          externalDatabase:
+            host: moodle-db-cluster-pooler.database.svc.cluster.local
+            port: 5432
+            user: moodleuser
+            password: "PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw"
+            database: moodledb
+            type: pgsql
+
+          moodleSkipInstall: true
+
+          redis:
+            enabled: false
+
+          externalRedis:
+            host: dragonfly-redis-master.dragonfly-system.svc.cluster.local
+            port: 6379
+            password: "dragonfly"
+
+          moodleUsername: admin
+          moodlePassword: "admin123"
+          moodleEmail: admin@example.com
+
+          service:
+            type: NodePort
+            nodePort: 31203
+
+          persistence:
+            enabled: true
+            size: 200Gi
+            storageClass: rook-cephfs
+            accessModes:
+              - ReadWriteMany
+
+          resources:
+            requests:
+              cpu: "2000m"
+              memory: "6Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+
+          extraVolumes:
+            - name: config
+              configMap:
+                name: config
+
+            - name: php-fpm-config
+              configMap:
+                name: "{{ (moodle is defined) | ternary(moodle.php_fpm_config_map, 'moodle-php-fpm-config') }}"
+
+          extraVolumeMounts:
+            - name: config
+              mountPath: /bitnami/moodle/config.php
+              subPath: config.php
+              readOnly: true
+
+            - name: php-fpm-config
+              mountPath: /opt/bitnami/php/etc/php-fpm.d/www.conf
+              subPath: www.conf
+              readOnly: true
+
+          # Extended health checks to allow for database initialization
+          startupProbe:
+            enabled: true
+            httpGet:
+              path: /login/index.php
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 60  # Allow up to 30 minutes for startup
+            successThreshold: 1
+
+    - name: Wait for single pod to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ moodle_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/instance={{ moodle_release_name }}
+          - app.kubernetes.io/name=moodle
+        field_selectors:
+          - status.phase=Running
+      register: moodle_pods
+      until: 
+        - moodle_pods.resources | length >= 1
+        - moodle_pods.resources[0].status.containerStatuses is defined
+        - moodle_pods.resources[0].status.containerStatuses[0].ready == true
+      retries: 60
+      delay: 10
+      ignore_errors: true  # Continue even if timeout occurs
+
+    - name: Wait additional time for database initialization to complete
+      pause:
+        seconds: 60

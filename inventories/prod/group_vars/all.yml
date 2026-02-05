@@ -1,29 +1,35 @@
-# Kubernetes
-kubeconfig: /home/ansible/.kube/config
+# inventories/prod/group_vars/all.yml
 
-# Moodle
+# Path to kubeconfig for connecting to the cluster
+kubeconfig: /home/administrator/.kube/config
+
+# Moodle deployment settings
 moodle:
   namespace: moodle
   release_name: moodle
-  replica_count: 3
+  replica_count: 3        # first deployment; scale later
+  php_fpm_config_map: moodle-php-fpm-config
+
   service:
     type: NodePort
     nodePort: 31203
+
   persistence:
     enabled: true
     size: 200Gi
     storageClass: rook-cephfs
     accessModes:
       - ReadWriteMany
+
   resources:
     requests:
-      cpu: "8000m"
+      cpu: "4000m"
       memory: "8Gi"
     limits:
-      cpu: "10000m"
-      memory: "12Gi"
+      cpu: "6000m"
+      memory: "10Gi"
 
-# External DB (non-secret)
+# External PostgreSQL database
 external_db:
   host: moodle-db-cluster.database.svc.cluster.local
   port: 5432
@@ -31,9 +37,8 @@ external_db:
   database: moodledb
   type: pgsql
 
-# Dragonfly (non-secret)
+# External Redis (Dragonfly)
 dragonfly:
-  namespace: dragonfly-system
   host: dragonfly-redis-master.dragonfly-system.svc.cluster.local
   port: 6379
 
@@ -41,4 +46,3 @@ dragonfly:
 external_db_password: "PQl5YR30j9geR9NrgLTPxzTBkNZ2OYIDDiLaDZm946Nk7O1mWmPsArY5C7yj9vcw"
 dragonfly_password: "dragonfly"
 moodle_admin_password: "admin123"
-
